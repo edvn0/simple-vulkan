@@ -3,11 +3,39 @@
 #include "sv/app.hpp"
 #include "sv/common.hpp"
 #include "sv/renderer.hpp"
+#include "vulkan/vulkan_core.h"
 
 #include <GLFW/glfw3.h>
 #include <iostream>
 
 namespace sv {
+
+namespace {
+VKAPI_ATTR VkBool32 VKAPI_CALL
+vk_debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                  VkDebugUtilsMessageTypeFlagsEXT messageType,
+                  const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+                  void*)
+{
+  auto ms = vkb::to_string_message_severity(messageSeverity);
+  auto mt = vkb::to_string_message_type(messageType);
+
+  static auto& out = std::cerr;
+
+  if (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) {
+    out << std::format("[{}: {}] - {}\n{}\n",
+                       ms,
+                       mt,
+                       pCallbackData->pMessageIdName,
+                       pCallbackData->pMessage);
+  } else {
+    out << std::format("[{}: {}]\n{}\n", ms, mt, pCallbackData->pMessage);
+  }
+  std::flush(out);
+
+  return VK_FALSE;
+}
+}
 
 VulkanContext::~VulkanContext()
 {
@@ -17,7 +45,6 @@ VulkanContext::~VulkanContext()
     delete_queue.pop_back();
   }
 
-  vkb::destroy_swapchain(swapchain);
   vkDestroySurfaceKHR(instance, surface, nullptr);
   vkb::destroy_device(device);
   vkb::destroy_instance(instance);
@@ -34,7 +61,7 @@ VulkanContext::create(const Window& window)
 
   vkb::InstanceBuilder instance_builder;
   auto instance_ret = instance_builder.require_api_version(1, 4)
-                        .use_default_debug_messenger()
+                        .set_debug_callback(vk_debug_callback)
                         .request_validation_layers()
                         .build();
   if (!instance_ret) {
@@ -85,12 +112,14 @@ VulkanContext::create(const Window& window)
   required_13_features.dynamicRendering = true;
   required_13_features.synchronization2 = true;
 
-  auto phys_device_builder = phys_device_selector.set_minimum_version(1, 3)
-                               .set_surface(surface)
-                               .set_required_features(required_features)
-                               .set_required_features_11(required_11_features)
-                               .set_required_features_12(required_12_features)
-                               .set_required_features_13(required_13_features);
+  auto phys_device_builder =
+    phys_device_selector.set_minimum_version(1, 3)
+      .set_surface(surface)
+      .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)
+      .set_required_features(required_features)
+      .set_required_features_11(required_11_features)
+      .set_required_features_12(required_12_features)
+      .set_required_features_13(required_13_features);
 
   auto phys_device_ret = phys_device_builder.select();
   if (!phys_device_ret) {
@@ -120,18 +149,6 @@ VulkanContext::create(const Window& window)
 
   auto disp = device.make_table();
 
-  vkb::SwapchainBuilder swapchain_builder{ device };
-  auto swap_ret =
-    swapchain_builder
-      .set_desired_min_image_count(vkb::SwapchainBuilder::DOUBLE_BUFFERING)
-      .build();
-  if (!swap_ret) {
-    std::cout << swap_ret.error().message() << " " << swap_ret.vk_result()
-              << "\n";
-    return make_error(ContextError{ InvalidWindow, "blah" });
-  }
-  auto swapchain = swap_ret.value();
-
   auto gfam = device.get_queue_index(vkb::QueueType::graphics).value();
   auto pfam = device.get_queue_index(vkb::QueueType::present).value();
   VkQueue gq{}, pq{};
@@ -141,7 +158,6 @@ VulkanContext::create(const Window& window)
   using P = std::unique_ptr<IContext>;
   auto vk_context = new VulkanContext(std::move(instance),
                                       std::move(device),
-                                      std::move(swapchain),
                                       std::move(disp),
                                       std::move(inst_disp),
                                       surface,

@@ -19,10 +19,17 @@ struct PimplDeleter
   }
 };
 
+enum class PresentMode : std::uint8_t
+{
+  FIFO,
+  Mailbox
+};
+
 struct ApplicationConfiguration
 {
   bool fail_on_any_error{ false };
   bool enable_fullscreen_switching{ false };
+  PresentMode mode{ PresentMode::FIFO };
   std::optional<std::tuple<std::uint32_t, std::uint32_t>>
     extent_if_not_fullscreen{ std::make_tuple(1280, 1024) };
 };
@@ -83,7 +90,6 @@ class App
   struct FrameSync
   {
     VkSemaphore acquire{};
-    VkSemaphore present{};
     VkCommandBuffer cmd{};
     std::uint64_t render_done_value{};
   };
@@ -94,6 +100,7 @@ class App
     std::uint64_t next_value{};
   };
 
+  std::vector<VkSemaphore> image_present_sems;
   std::vector<FrameSync> frames;
   TimelineSync timeline{};
   VkCommandPool command_pool{};
@@ -123,12 +130,11 @@ public:
   static auto create(const ApplicationConfiguration&)
     -> std::expected<App, InitialisationError>;
 
-  auto attach_context(IContext&)
-    -> bool; // creates swapchain + sync using the context
+  auto attach_context(IContext&) -> bool;
   auto detach_context() -> void;
 
   auto acquire_frame() -> std::optional<AcquiredFrame>;
-  auto command_buffer_for_frame() -> VkCommandBuffer;
+  auto command_buffer_for_frame() -> std::optional<VkCommandBuffer>;
   auto submit_frame(const AcquiredFrame&) -> bool;
 
   auto get_swapchain_extent() const -> VkExtent2D { return swapchain_extent; }

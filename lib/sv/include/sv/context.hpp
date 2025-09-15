@@ -46,7 +46,6 @@ class VulkanContext : IContext
 {
   vkb::Instance instance;
   vkb::Device device;
-  vkb::Swapchain swapchain;
   vkb::DispatchTable dispatch_table;
   vkb::InstanceDispatchTable instance_dispatch_table;
   VkSurfaceKHR surface{ nullptr };
@@ -59,7 +58,6 @@ class VulkanContext : IContext
 
   VulkanContext(vkb::Instance&& i,
                 vkb::Device&& d,
-                vkb::Swapchain&& sc,
                 vkb::DispatchTable&& dt,
                 vkb::InstanceDispatchTable&& idt,
                 VkSurfaceKHR surf,
@@ -69,13 +67,12 @@ class VulkanContext : IContext
                 std::uint32_t pfam)
     : instance(std::move(i))
     , device(std::move(d))
-    , swapchain(std::move(sc))
     , dispatch_table(std::move(dt))
     , instance_dispatch_table(std::move(idt))
     , surface(surf)
     , graphics_queue(gq)
-    , graphics_family(gfam)
     , present_queue(pq)
+    , graphics_family(gfam)
     , present_family(pfam)
   {
   }
@@ -115,7 +112,7 @@ public:
   {
     return surface;
   }
-  auto enqueue_destruction(std::function<void(IContext&)>&& f) -> void
+  auto enqueue_destruction(std::function<void(IContext&)>&& f) -> void override
   {
     delete_queue.emplace_back(std::forward<std::function<void(IContext&)>>(f));
   }

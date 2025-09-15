@@ -3,6 +3,7 @@
 #include "sv/common.hpp"
 #include "sv/context.hpp"
 #include "sv/renderer.hpp"
+#include "vulkan/vulkan_core.h"
 
 #include <GLFW/glfw3.h>
 #include <array>
@@ -19,7 +20,8 @@ wait_frame_done(VkDevice device, const auto& t, const auto& f) -> void
 {
   if (f.render_done_value == 0)
     return;
-  VkSemaphoreWaitInfo wi{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+  VkSemaphoreWaitInfo wi{};
+  wi.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
   wi.semaphoreCount = 1;
   VkSemaphore sem = t.render_timeline;
   wi.pSemaphores = &sem;
@@ -179,9 +181,10 @@ App::App(const ApplicationConfiguration& conf, std::unique_ptr<Window> w)
 }
 
 App::App(App&& rhs) noexcept
-  : allocator(std::move(rhs.allocator))
-  , window(std::move(rhs.window))
+  : app_config(rhs.app_config)
   , owns_windowing_system(std::exchange(rhs.owns_windowing_system, false))
+  , allocator(std::move(rhs.allocator))
+  , window(std::move(rhs.window))
 {
 }
 
@@ -254,6 +257,13 @@ App::create(const ApplicationConfiguration& config)
   }
   tmp.window->opaque_handle = window;
 
+  glfwSetKeyCallback(
+    window, +[](GLFWwindow* w, int key, int, int, int) -> void {
+      if (key == GLFW_KEY_ESCAPE) {
+        glfwSetWindowShouldClose(w, GLFW_TRUE);
+      }
+    });
+
   return std::expected<App, InitialisationError>{ std::in_place,
                                                   std::move(tmp) };
 }
@@ -261,9 +271,12 @@ App::create(const ApplicationConfiguration& config)
 auto
 App::create_command_pool(std::uint32_t family) -> bool
 {
-  VkCommandPoolCreateInfo ci{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
-  ci.queueFamilyIndex = family;
-  ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  VkCommandPoolCreateInfo ci{
+    .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+    .pNext = nullptr,
+    .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+    .queueFamilyIndex = family,
+  };
   if (vkCreateCommandPool(context->get_device(), &ci, nullptr, &command_pool) !=
       VK_SUCCESS)
     return false;
@@ -283,14 +296,16 @@ App::destroy_command_pool() -> void
 auto
 App::create_swapchain() -> bool
 {
+  if (swapchain.swapchain)
+    destroy_swapchain();
 
-  vkb::SwapchainBuilder b{
-    context->get_device_wrapper(),
-    context->get_surface(),
-  };
+  vkb::SwapchainBuilder b{ context->get_device_wrapper(),
+                           context->get_surface() };
   auto ret =
     b.set_desired_min_image_count(vkb::SwapchainBuilder::DOUBLE_BUFFERING)
-      .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+      .set_desired_present_mode(app_config.mode == PresentMode::FIFO
+                                  ? VK_PRESENT_MODE_FIFO_KHR
+                                  : VK_PRESENT_MODE_MAILBOX_KHR)
       .build();
   if (!ret)
     return false;
@@ -305,6 +320,16 @@ App::create_swapchain() -> bool
   views = std::move(vws.value());
   swapchain_format = swapchain.image_format;
   swapchain_extent = swapchain.extent;
+
+  image_present_sems.clear();
+  image_present_sems.resize(images.size());
+  VkSemaphoreCreateInfo sci{};
+  sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+  for (auto& sem : image_present_sems) {
+    if (vkCreateSemaphore(context->get_device(), &sci, nullptr, &sem) !=
+        VK_SUCCESS)
+      return false;
+  }
   return true;
 }
 
@@ -314,7 +339,10 @@ App::destroy_swapchain() -> void
   if (context) {
     for (auto v : views)
       vkDestroyImageView(context->get_device(), v, nullptr);
+    for (auto sem : image_present_sems)
+      vkDestroySemaphore(context->get_device(), sem, nullptr);
   }
+  image_present_sems.clear();
   views.clear();
   images.clear();
   if (swapchain.swapchain)
@@ -325,10 +353,17 @@ App::destroy_swapchain() -> void
 auto
 App::create_frame_sync(uint32_t in_flight) -> bool
 {
-  VkSemaphoreTypeCreateInfo ti{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
-  ti.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-  ti.initialValue = 0;
-  VkSemaphoreCreateInfo tci{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, &ti };
+  VkSemaphoreTypeCreateInfo ti{
+    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+    .pNext = nullptr,
+    .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
+    .initialValue = 0,
+  };
+  VkSemaphoreCreateInfo tci{
+    VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+    &ti,
+    0,
+  };
   if (vkCreateSemaphore(
         context->get_device(), &tci, nullptr, &timeline.render_timeline) !=
       VK_SUCCESS)
@@ -339,19 +374,16 @@ App::create_frame_sync(uint32_t in_flight) -> bool
   timeline.next_value = 1;
 
   frames.resize(in_flight);
-  VkSemaphoreCreateInfo sci{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+  VkSemaphoreCreateInfo sci{};
+  sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
   for (auto& f : frames) {
     if (vkCreateSemaphore(context->get_device(), &sci, nullptr, &f.acquire) !=
         VK_SUCCESS)
       return false;
-    if (vkCreateSemaphore(context->get_device(), &sci, nullptr, &f.present) !=
-        VK_SUCCESS)
-      return false;
 
-    VkCommandBufferAllocateInfo ai{
-      VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO
-    };
+    VkCommandBufferAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     ai.commandPool = command_pool;
     ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     ai.commandBufferCount = 1;
@@ -360,9 +392,6 @@ App::create_frame_sync(uint32_t in_flight) -> bool
       return false;
 
     context->enqueue_destruction([ptr = f.acquire](IContext& ctx) {
-      vkDestroySemaphore(ctx.get_device(), ptr, nullptr);
-    });
-    context->enqueue_destruction([ptr = f.present](IContext& ctx) {
       vkDestroySemaphore(ctx.get_device(), ptr, nullptr);
     });
     f.render_done_value = 0;
@@ -408,10 +437,9 @@ auto
 App::acquire_frame() -> std::optional<AcquiredFrame>
 {
   auto& f = frames[frame_cursor];
-
   wait_frame_done(context->get_device(), timeline, f);
 
-  uint32_t index{};
+  std::uint32_t index{};
   auto res = vkAcquireNextImageKHR(context->get_device(),
                                    swapchain.swapchain,
                                    UINT64_MAX,
@@ -432,14 +460,20 @@ App::acquire_frame() -> std::optional<AcquiredFrame>
   af.view = views[index];
   af.extent = swapchain_extent;
   af.acquire = f.acquire;
-  af.present = f.present;
+  af.present = image_present_sems[index]; // ← per-image present semaphore
   return af;
 }
 
 auto
-App::command_buffer_for_frame() -> VkCommandBuffer
+App::command_buffer_for_frame() -> std::optional<VkCommandBuffer>
 {
-  return frames[frame_cursor].cmd;
+  auto& cmd = frames[frame_cursor].cmd;
+  VkCommandBufferBeginInfo begin_info{};
+  begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  if (vkBeginCommandBuffer(cmd, &begin_info) != VK_SUCCESS) {
+    return std::nullopt;
+  }
+  return cmd;
 }
 
 auto
@@ -447,25 +481,48 @@ App::submit_frame(const AcquiredFrame& af) -> bool
 {
   auto& f = frames[frame_cursor];
 
-  VkCommandBufferSubmitInfo cb{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO };
-  cb.commandBuffer = f.cmd;
+  if (vkEndCommandBuffer(f.cmd) != VK_SUCCESS) {
+    return false;
+  }
 
-  VkSemaphoreSubmitInfo w_acq{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
-  w_acq.semaphore = af.acquire;
-  w_acq.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+  VkCommandBufferSubmitInfo cb{
+    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+    .pNext = nullptr,
+    .commandBuffer = f.cmd,
+    .deviceMask = 0,
+  };
+  VkSemaphoreSubmitInfo w_acq{
+    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+    .pNext = nullptr,
+    .semaphore = af.acquire,
+    .value = 0,
+    .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+    .deviceIndex = 0,
+  };
 
-  const uint64_t signal_value = timeline.next_value++;
+  const std::uint64_t signal_value = timeline.next_value++;
 
-  VkSemaphoreSubmitInfo s_timeline{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
-  s_timeline.semaphore = timeline.render_timeline;
-  s_timeline.value = signal_value;
-  s_timeline.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+  VkSemaphoreSubmitInfo s_timeline{
+    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+    .pNext = nullptr,
+    .semaphore = timeline.render_timeline,
+    .value = signal_value,
+    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+    .deviceIndex = 0,
 
-  VkSemaphoreSubmitInfo s_present{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
-  s_present.semaphore = af.present;
-  s_present.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+  };
 
-  VkSubmitInfo2 si{ VK_STRUCTURE_TYPE_SUBMIT_INFO_2 };
+  VkSemaphoreSubmitInfo s_present{
+    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+    .pNext = nullptr,
+    .semaphore = af.present,
+    .value = 0,
+    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+    .deviceIndex = 0,
+  };
+
+  VkSubmitInfo2 si{};
+  si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
   si.waitSemaphoreInfoCount = 1;
   si.pWaitSemaphoreInfos = &w_acq;
   si.commandBufferInfoCount = 1;
@@ -476,7 +533,8 @@ App::submit_frame(const AcquiredFrame& af) -> bool
 
   vkQueueSubmit2(context->get_graphics_queue(), 1, &si, VK_NULL_HANDLE);
 
-  VkPresentInfoKHR pi{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
+  VkPresentInfoKHR pi{};
+  pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
   pi.waitSemaphoreCount = 1;
   pi.pWaitSemaphores = &af.present;
   VkSwapchainKHR sc = swapchain.swapchain;
