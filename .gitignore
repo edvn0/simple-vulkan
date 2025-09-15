@@ -1,0 +1,30 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+build
+.cache
+bindings
+imgui.ini
+
+compile_commands.json
+.vs
+
+.vscode/
+conan_profiles
+CMakeUserPresets.json
+
+*.spv
+
+.idea
+
+assets/environment/*.ktx2
+assets/environment/*.ktx
+
