@@ -16,7 +16,9 @@ enum class BufferUsageBits : std::uint8_t
   Vertex = bit(1),
   Uniform = bit(2),
   Storage = bit(3),
-  Indirect = bit(4)
+  Indirect = bit(4),
+  Destination = bit(5),
+  Source = bit(6),
 };
 BIT_FIELD(BufferUsageBits)
 

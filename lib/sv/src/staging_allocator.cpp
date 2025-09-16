@@ -655,6 +655,32 @@ StagingAllocator::upload_blob_with_regions(
 }
 
 void
+StagingAllocator::upload(TextureHandle handle,
+    const VkRect2D& image_region,
+    std::uint32_t base_mip_level,
+    std::uint32_t mip_level_count,
+    std::uint32_t layer,
+    std::uint32_t num_layers,
+    VkFormat format,
+    const void* data,
+    std::uint32_t buffer_row_length)
+{
+  auto* img = context.get_texture_pool().get(handle);
+  if (!img)
+    return;
+
+upload(*img,
+        image_region,
+        base_mip_level,
+        mip_level_count,
+        layer,
+        num_layers,
+        format,
+        data,
+        buffer_row_length);
+}
+
+void
 StagingAllocator::upload(VulkanTextureND& image,
                          const VkRect2D& image_region,
                          std::uint32_t base_mip_level,
@@ -955,6 +981,7 @@ StagingAllocator::ensure_size(std::uint32_t size_needed)
 
   staging_buffer = VulkanDeviceBuffer::create(context,
                                               {
+                                                .usage = BufferUsageBits::Destination | BufferUsageBits::Source,
                                                 .storage = StorageType::Device,
                                                 .size = staging_buffer_size,
                                                 .debug_name = "Staging buffer",

@@ -101,14 +101,18 @@ VulkanDeviceBuffer::create(IContext& ctx, const BufferDescription& w)
   -> Holder<BufferHandle>
 {
   BufferDescription description{ w };
-  if constexpr (!use_staging && description.storage == StorageType::Device) {
+  if constexpr (!use_staging &&
+                (description.storage & StorageType::Device) != StorageType{0}) {
     description.storage = StorageType::HostVisible;
   }
 
   VkBufferUsageFlags usage_flags =
-    description.storage == StorageType::Device
+    (description.storage & StorageType::Device) != StorageType{0}
       ? VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT
       : 0;
+
+  VkMemoryPropertyFlags memory_flags =
+    storage_type_to_vk_memory_property_flags(description.storage);
 
   if ((description.usage & BufferUsageBits::Index) != BufferUsageBits{ 0 })
     usage_flags |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
@@ -124,9 +128,15 @@ VulkanDeviceBuffer::create(IContext& ctx, const BufferDescription& w)
   if ((description.usage & BufferUsageBits::Indirect) != BufferUsageBits{ 0 })
     usage_flags |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+  if ((description.usage &
+       (BufferUsageBits::Source | BufferUsageBits::Destination)) !=
+      BufferUsageBits{ 0 }) {
+    usage_flags |=
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    memory_flags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+  }
 
-  const VkMemoryPropertyFlags memory_flags =
-    storage_type_to_vk_memory_property_flags(description.storage);
+  
   BufferHandle handle = create_buffer(
     ctx, description.size, usage_flags, memory_flags, description.debug_name);
 

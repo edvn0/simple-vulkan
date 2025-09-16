@@ -86,6 +86,10 @@ struct IContext
   virtual auto flush_mapped_memory(BufferHandle, OffsetSize) const -> void = 0;
   virtual auto invalidate_mapped_memory(BufferHandle, OffsetSize) const
     -> void = 0;
+
+  virtual auto get_immediate_commands() -> ImmediateCommands& = 0;
+  virtual auto get_staging_allocator() -> StagingAllocator& = 0;
+
 };
 
 class VulkanContext final : public IContext
@@ -205,6 +209,14 @@ public:
   auto flush_mapped_memory(BufferHandle, OffsetSize) const -> void override;
   auto invalidate_mapped_memory(BufferHandle, OffsetSize) const
     -> void override;
+
+  auto get_immediate_commands() -> ImmediateCommands & override {
+    return *immediate_commands;
+  }
+  auto get_staging_allocator() -> StagingAllocator& override
+  {
+    return *staging_allocator;
+  }
 
   static auto create(const Window&)
     -> std::expected<std::unique_ptr<IContext>, ContextError>;

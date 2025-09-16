@@ -35,6 +35,15 @@ public:
               VkFormat format,
               const void* data,
               std::uint32_t bufferRowLength);
+  void upload(TextureHandle image,
+              const VkRect2D& imageRegion,
+              std::uint32_t baseMipLevel,
+              std::uint32_t numMipLevels,
+              std::uint32_t layer,
+              std::uint32_t numLayers,
+              VkFormat format,
+              const void* data,
+              std::uint32_t bufferRowLength);
   void upload(VulkanTextureND& image,
               const void* data,
               std::size_t data_bytes,

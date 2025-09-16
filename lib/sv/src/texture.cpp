@@ -194,6 +194,48 @@ storage_type_to_vk_memory_property_flags(StorageType storage)
   }
   return memory_flags;
 }
+
+auto
+format_is_depth(const VkFormat format) -> bool
+{
+  switch (format) {
+    case VK_FORMAT_D16_UNORM:
+    case VK_FORMAT_X8_D24_UNORM_PACK32:
+    case VK_FORMAT_D32_SFLOAT:
+    case VK_FORMAT_D16_UNORM_S8_UINT:
+    case VK_FORMAT_D24_UNORM_S8_UINT:
+    case VK_FORMAT_D32_SFLOAT_S8_UINT:
+      return true;
+    default:
+      return false;
+  }
+}
+
+auto
+format_is_stencil(const VkFormat format) -> bool
+{
+  switch (format) {
+    case VK_FORMAT_S8_UINT:
+    case VK_FORMAT_D16_UNORM_S8_UINT:
+    case VK_FORMAT_D24_UNORM_S8_UINT:
+    case VK_FORMAT_D32_SFLOAT_S8_UINT:
+      return true;
+    default:
+      return false;
+  }
+}
+
+auto
+is_depth_or_stencil_format(const VkFormat format) -> bool
+{
+  return format_is_depth(format) || format_is_stencil(format);
+}
+
+auto
+is_depth_or_stencil_format(const Format format) -> bool
+{
+  return is_depth_or_stencil_format(format_to_vk_format(format));
+}
 }
 
 auto
@@ -203,14 +245,15 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
   assert(!desc.debug_name.empty());
 
   VkImageUsageFlags usage_flags =
-    (desc.storage == StorageType::Device) ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0;
+    (desc.storage & StorageType::Device) != StorageType{ 0 }
+      ? VK_IMAGE_USAGE_TRANSFER_DST_BIT
+      : 0;
   if ((desc.usage_bits & TextureUsageBits::Sampled) != TextureUsageBits{ 0 }) {
     usage_flags |= VK_IMAGE_USAGE_SAMPLED_BIT;
   }
   if ((desc.usage_bits & TextureUsageBits::Storage) != TextureUsageBits{ 0 }) {
     usage_flags |= VK_IMAGE_USAGE_STORAGE_BIT;
   }
-  /* TODO!
   if ((desc.usage_bits & TextureUsageBits::Attachment) !=
       TextureUsageBits{ 0 }) {
     usage_flags |= is_depth_or_stencil_format(desc.format)
@@ -220,7 +263,7 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
       usage_flags |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
     }
   }
-    */
+    
 
   if (desc.storage != StorageType::Transient) {
     usage_flags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -272,8 +315,8 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
     .samples = sample_count,
     .level_count = level_count,
     .layer_count = layer_count,
-    .is_depth_format = false,   // VulkanImage::isDepthFormat(vkFormat),
-    .is_stencil_format = false, // VulkanImage::isStencilFormat(vkFormat),
+    .is_depth_format = format_is_depth(vulkan_format),
+    .is_stencil_format = format_is_stencil(vulkan_format),
   };
 
   const VkImageCreateInfo ci = {
@@ -357,14 +400,15 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
   TextureHandle handle = ctx.get_texture_pool().insert(std::move(image));
   ctx.update_resources();
   if (!desc.pixel_data.empty()) {
-    // const uint32_t numLayers = desc.type == TextureType::Cube ? 6 : 1;
-    /*ctx.upload(handle,
-               {
-                 .dimensions = desc.dimensions,
-                 .layer_count = numLayers,
-                 .mip_levels = desc.mip_count_pixel_data,
-               },
-               desc.pixel_data);*/
+    ctx.get_staging_allocator().upload(handle,
+      VkRect2D{ .offset = { 0, 0 }, .extent = {extent.width, extent.height},
+                                       },
+                                       0,
+                                       level_count,
+                                       0,
+                                       layer_count,
+                                       vulkan_format,
+                                       desc.pixel_data.data(), 0);
     /*if (desc.generate_mipmaps)
       ctx.generate_mipmaps(handle);*/
   }
@@ -416,7 +460,7 @@ VulkanTextureND::get_or_create_image_view_for_framebuffer(IContext& ctx,
 
   if (cached == VK_NULL_HANDLE) {
     cached = create_image_view(
-      ctx, format, VK_IMAGE_ASPECT_COLOR_BIT, "Framebuffer", 1);
+      ctx, format, VK_IMAGE_ASPECT_COLOR_BIT, std::format("Framebuffer[{}{}]", level, layer), 1);
   }
 
   return cached;

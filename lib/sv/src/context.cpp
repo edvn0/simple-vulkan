@@ -149,9 +149,10 @@ VulkanContext::create(const Window& window)
   required_12_features.shaderSampledImageArrayNonUniformIndexing = true;
   required_12_features.shaderStorageBufferArrayNonUniformIndexing = true;
   required_12_features.shaderStorageImageArrayNonUniformIndexing = true;
-  required_12_features.shaderInputAttachmentArrayNonUniformIndexing = true;
-  required_12_features.shaderUniformTexelBufferArrayNonUniformIndexing = true;
-  required_12_features.shaderStorageTexelBufferArrayNonUniformIndexing = true;
+
+  required_12_features.shaderUniformTexelBufferArrayNonUniformIndexing = false;
+  required_12_features.shaderStorageTexelBufferArrayNonUniformIndexing = false;
+  required_12_features.shaderInputAttachmentArrayNonUniformIndexing = false;
 
   VkPhysicalDeviceVulkan13Features required_13_features{};
   required_13_features.dynamicRendering = true;
