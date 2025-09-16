@@ -1,9 +1,9 @@
 #include "sv/app.hpp"
 
+#include "sv/bindless.hpp"
 #include "sv/common.hpp"
 #include "sv/context.hpp"
 #include "sv/renderer.hpp"
-#include "vulkan/vulkan_core.h"
 
 #include <GLFW/glfw3.h>
 #include <array>
@@ -195,6 +195,7 @@ App::operator=(App&& rhs) noexcept -> App&
     return *this;
   if (owns_windowing_system)
     glfwTerminate();
+  app_config = rhs.app_config;
   allocator = std::move(rhs.allocator);
   window = std::move(rhs.window);
   owns_windowing_system = std::exchange(rhs.owns_windowing_system, false);
@@ -411,6 +412,9 @@ auto
 App::attach_context(IContext& ctx) -> bool
 {
   context = &ctx;
+
+  context->initialise_resources();
+
   if (!create_command_pool(context->get_graphics_queue_family()))
     return false;
   if (!create_swapchain())
@@ -436,6 +440,10 @@ App::detach_context() -> void
 auto
 App::acquire_frame() -> std::optional<AcquiredFrame>
 {
+  if (auto* vk_context = dynamic_cast<VulkanContext*>(context)) {
+    Bindless<VulkanContext>::sync_on_frame_acquire(*vk_context);
+  }
+
   auto& f = frames[frame_cursor];
   wait_frame_done(context->get_device(), timeline, f);
 

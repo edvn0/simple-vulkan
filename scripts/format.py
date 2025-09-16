@@ -32,8 +32,7 @@ def format_file(file_path: str) -> tuple[str, bool, str]:
         )
         return (file_path, True, "")
     except subprocess.CalledProcessError as e:
-        error_msg = f"Error: {e.stderr.strip()}" if e.stderr else f"Return code: {
-            e.returncode}"
+        error_msg = f"Error: {e.stderr.strip()}" if e.stderr else f"Return code: {e.returncode}"
         return (file_path, False, error_msg)
     except FileNotFoundError:
         return (file_path, False, "clang-format not found in PATH")

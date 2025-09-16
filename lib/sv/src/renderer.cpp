@@ -36,7 +36,7 @@ to_general(VkCommandBuffer buf, VkImage image, VkImageLayout old_layout) -> void
   dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
   dep.imageMemoryBarrierCount = 1;
   dep.pImageMemoryBarriers = &b;
-  vkCmdPipelineBarrier2(buf, &dep); // replace nullptr with your cmd
+  vkCmdPipelineBarrier2(buf, &dep);
 }
 
 auto
@@ -54,7 +54,7 @@ to_present(VkCommandBuffer buf, VkImage image) -> void
   dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
   dep.imageMemoryBarrierCount = 1;
   dep.pImageMemoryBarriers = &b;
-  vkCmdPipelineBarrier2(buf, &dep); // replace nullptr with your cmd
+  vkCmdPipelineBarrier2(buf, &dep);
 }
 
 auto

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "sv/context.hpp"
+#include "sv/object_holder.hpp"
+
 #include <vulkan/vulkan.h>
 
 namespace sv {
@@ -12,10 +15,11 @@ class Renderer
 private:
   IContext* context{ nullptr };
 
+  Holder<GraphicsPipelineHandle> basic;
+
 public:
   Renderer(IContext&);
-
-  auto record(const AcquiredFrame& af, VkCommandBuffer cmd) -> void;
+  auto record(const AcquiredFrame&, VkCommandBuffer) -> void;
 };
 
 }

@@ -39,10 +39,18 @@ set(GLM_BUILD_TESTS OFF CACHE INTERNAL "")
 set(GLM_BUILD_INSTALL OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(glm)
 
+FetchContent_Declare(
+  vma
+  GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+  GIT_TAG master
+)
+FetchContent_MakeAvailable(vma)
+
 find_package(Vulkan REQUIRED COMPONENTS glslang)
 
-file(GLOB_RECURSE sv_sources CONFIGURE_DEPENDS "*.cpp" "*.hpp")
+file(GLOB_RECURSE sv_sources CONFIGURE_DEPENDS "sv/src/*.cpp" "sv/include/*.hpp")
 add_library(sv STATIC ${sv_sources})
+target_precompile_headers(sv PUBLIC sv/include/sv/svpch.hpp)
 target_include_directories(sv PUBLIC "sv/include" PRIVATE "${vulkan_headers_SOURCE_DIR}/include")
 set_target_properties(sv PROPERTIES CXX_STANDARD 23)
 target_compile_options(sv PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /EHsc)
@@ -55,4 +63,22 @@ target_link_libraries(sv
     Vulkan::glslang
     vk-bootstrap
     glm::glm
+    GPUOpen::VulkanMemoryAllocator
 )
+
+if (BUILD_TESTING)
+  FetchContent_Declare(
+    doctest
+    GIT_REPOSITORY https://github.com/doctest/doctest.git
+    GIT_TAG master
+    )
+    FetchContent_MakeAvailable(doctest)
+    include(${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake)
+    
+    add_executable(sv_tests sv/tests/main.cpp sv/tests/object_pool_tests.cpp)
+    doctest_discover_tests(sv_tests)
+    set_target_properties(sv_tests PROPERTIES CXX_STANDARD 23)
+    target_compile_options(sv_tests PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /EHsc)
+    target_link_libraries(sv_tests PRIVATE sv doctest::doctest)
+    target_include_directories(sv_tests PRIVATE ${doctest_INCLUDE_DIR})
+endif()
