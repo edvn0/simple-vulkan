@@ -30,7 +30,7 @@ private:
   static inline VmaAllocator allocator{ VK_NULL_HANDLE };
 
 public:
-  static auto initialise(IContext&) -> void;
+  static auto initialise(VkInstance, VkPhysicalDevice, VkDevice) -> void;
   static auto deinitialise() -> void { vmaDestroyAllocator(the()); }
   static auto the() -> VmaAllocator&;
 };
@@ -75,6 +75,41 @@ dispatch_member(const vkb::DispatchTable& tbl, Args&&... args)
     return fn(std::forward<Args>(args)...);
 }
 }
+
+class VulkanContext;
+class VulkanSwapchain final
+{
+  static constexpr auto max_image_count = 16U;
+
+public:
+  VulkanSwapchain(IContext&);
+  ~VulkanSwapchain();
+
+  auto present(VkSemaphore) -> bool;
+
+  auto get_current_image() const -> VkImage;
+  auto get_current_image_view() const -> VkImageView;
+  auto get_current_texture() -> TextureHandle;
+  auto get_current_image_index() const -> std::uint32_t {
+    return current_image_index;
+  }
+  auto get_surface_format() const { return swapchain.image_format; }
+  auto get_image_count() const { return swapchain.image_count; }
+
+  auto resize(std::uint32_t, std::uint32_t) -> void;
+
+public:
+  VulkanContext* context{ nullptr };
+  vkb::Swapchain swapchain;
+  uint32_t current_image_index = 0; // [0...numSwapchainImages_)
+  uint64_t current_frame_index = 0; // [0...+inf)
+  bool get_next_image = true;
+  std::array<TextureHandle , max_image_count> swapchain_textures {};
+  std::array<VkSemaphore , max_image_count> acquire_semaphores {};
+  std::array<VkFence , max_image_count> present_fence {};
+  std::array<uint64_t, max_image_count> timeline_wait_values{};
+
+};
 
 class VulkanContext final : public IContext
 {
@@ -121,10 +156,16 @@ class VulkanContext final : public IContext
   CommandBuffer command_buffer;
   friend class CommandBuffer;
 
+  std::unique_ptr<VulkanSwapchain> swapchain;
+  VkSemaphore timeline_semaphore;
+  bool has_swapchain_maintenance_1{ false };
+  friend class VulkanSwapchain;
+
   std::deque<std::function<void(IContext&)>> delete_queue;
   std::deque<std::function<void(IContext&)>> pre_frame_queue;
 
   auto create_placeholder_resources() -> void;
+  auto initialise_swapchain(std::uint32_t, std::uint32_t) -> bool;
 
   VulkanContext(vkb::Instance&& i,
                 vkb::Device&& d,
@@ -180,13 +221,6 @@ public:
     pre_frame_queue.emplace_back(
       std::forward<std::function<void(IContext&)>>(f));
   }
-  auto initialise_resources() -> void override
-  {
-    staging_allocator = std::make_unique<StagingAllocator>(*this);
-    immediate_commands =
-      std::make_unique<ImmediateCommands>(*this, "ImmediateCommands");
-    create_placeholder_resources();
-  }
   auto update_resources() -> void override { needs_descriptor_update = true; }
 
   auto get_texture_pool() -> TexturePool& override { return textures; }
@@ -237,7 +271,13 @@ public:
     return command_buffer;
   }
 
-  auto submit(ICommandBuffer& cmd, TextureHandle) -> void override;
+  auto recreate_swapchain(std::uint32_t w, std::uint32_t h) -> bool {
+    return initialise_swapchain(w, h);
+  }
+  auto get_current_swapchain_texture() -> TextureHandle override;
+
+auto submit(ICommandBuffer& commandBuffer, TextureHandle present)
+    -> SubmitHandle override;
 
   auto get_immediate_commands() -> ImmediateCommands& override
   {

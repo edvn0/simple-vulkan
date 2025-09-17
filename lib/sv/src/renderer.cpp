@@ -99,27 +99,32 @@ Renderer::Renderer(IContext& ctx)
 }
 
 auto
-Renderer::record(const sv::AcquiredFrame& af) -> void
+Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
 {
+  double t = glfwGetTime();
+
+  float r = 0.5f + 0.5f * static_cast<float>(std::sin(t + 0.0));
+  float g = 0.5f + 0.5f * static_cast<float>(std::sin(t + 2.0));
+  float b = 0.5f + 0.5f * static_cast<float>(std::sin(t + 4.0));
+
   const auto basic_render_pass = RenderPass {
     .color = {
       RenderPass::AttachmentDescription{
         .load_op = LoadOp::Clear,
         .store_op = StoreOp::Store,
-        .clear_colour = {std::array<float, 4>{1.0F, 0.F, 0.F, 1.F}}
+        .clear_colour = {std::array<float, 4>{r,g,b, 1.F}}
       },
     },
   };
 
   const auto basic_framebuffer =
     Framebuffer{ .color = { Framebuffer::AttachmentDescription{
-                   .texture = af.image,
-                 } } };
+                   .texture = present,
+                 } },
+                 .debug_name = "Swapchain" };
 
-  auto& cb = context->acquire_command_buffer();
-  cb.cmd_begin_rendering(basic_render_pass, basic_framebuffer, {});
-  cb.cmd_end_rendering();
-  context->submit(cb, af.image);
+  buf.cmd_begin_rendering(basic_render_pass, basic_framebuffer, {});
+  buf.cmd_end_rendering();
 }
 
 }

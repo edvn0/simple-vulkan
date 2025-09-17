@@ -33,9 +33,7 @@ main(int argc, char** argv)
   auto app = std::move(maybe_app.value());
 
   auto maybe_ctx = VulkanContext::create(app.get_window(),
-                                         {
-                                           .abort_on_validation_error = true,
-                                         });
+                          { .abort_on_validation_error = false,  });
   if (!maybe_ctx)
     return 1;
   auto context = std::move(maybe_ctx.value());
@@ -48,13 +46,10 @@ main(int argc, char** argv)
   while (!app.should_close()) {
     app.poll_events();
 
-    auto af = app.acquire_frame();
-    if (!af)
-      continue;
+    auto& cmd = context->acquire_command_buffer();
 
-    renderer.record(*af);
-
-    app.submit_frame(*af);
+    renderer.record(cmd, context->get_current_swapchain_texture());
+    context->submit(cmd, context->get_current_swapchain_texture());
   }
 
   app.detach_context();

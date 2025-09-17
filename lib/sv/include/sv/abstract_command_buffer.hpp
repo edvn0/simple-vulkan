@@ -31,6 +31,7 @@ public:
                                             const Dependencies &deps = {})
         -> void = 0;
 */
+  virtual auto get_command_buffer() const -> VkCommandBuffer = 0;
   virtual auto cmd_begin_rendering(const RenderPass& render_pass,
                                    const Framebuffer& framebuffer,
                                    const Dependencies& deps) -> void = 0;

@@ -202,7 +202,7 @@ CommandBuffer::cmd_begin_rendering(const RenderPass& render_pass,
       .pNext = nullptr,
       .imageView = color_texture->get_or_create_image_view_for_framebuffer(
         *context, desc_color.level, desc_color.layer),
-      .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+      .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
       .resolveMode =
         sample_count_more_than_one(samples)
           ? resolve_mode_to_vk_resolve_mode_flag_bits(
@@ -226,8 +226,7 @@ CommandBuffer::cmd_begin_rendering(const RenderPass& render_pass,
       colour_attachments[i].resolveImageView =
         colour_resolve_texture->get_or_create_image_view_for_framebuffer(
           *context, desc_color.level, desc_color.layer);
-      colour_attachments[i].resolveImageLayout =
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+      colour_attachments[i].resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
     }
   }
 
@@ -245,7 +244,7 @@ CommandBuffer::cmd_begin_rendering(const RenderPass& render_pass,
       .pNext = nullptr,
       .imageView = depth_texture_obj->get_or_create_image_view_for_framebuffer(
         *context, desc_depth.level, desc_depth.layer),
-      .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+      .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
       .resolveMode = VK_RESOLVE_MODE_NONE,
       .resolveImageView = VK_NULL_HANDLE,
       .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
@@ -264,8 +263,7 @@ CommandBuffer::cmd_begin_rendering(const RenderPass& render_pass,
       depth_attachment.resolveImageView =
         depth_resolve_texture->get_or_create_image_view_for_framebuffer(
           *context, desc_depth.level, desc_depth.layer);
-      depth_attachment.resolveImageLayout =
-        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+      depth_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
       depth_attachment.resolveMode = resolve_mode_to_vk_resolve_mode_flag_bits(
         desc_depth.resolve_mode,
         context->vulkan_properties.twelve.supportedDepthResolveModes);

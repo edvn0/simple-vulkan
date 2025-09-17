@@ -157,6 +157,7 @@ ImmediateCommands::purge() -> void
   }
 }
 
+
 auto
 ImmediateCommands::submit(const CommandBufferWrapper& wrapper) -> SubmitHandle
 {
@@ -218,7 +219,6 @@ ImmediateCommands::submit(const CommandBufferWrapper& wrapper) -> SubmitHandle
     submit_counter++;
   return last_submit_handle;
 }
-
 auto
 ImmediateCommands::is_ready(SubmitHandle handle) const -> bool
 {

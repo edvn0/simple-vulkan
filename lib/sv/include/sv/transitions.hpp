@@ -187,14 +187,6 @@ public:
                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
   }
 
-  static auto color_attachment_to_present(VkCommandBuffer cmd_buffer,
-                                          VkImage image) -> void
-  {
-    transition_color(cmd_buffer,
-                     image,
-                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-  }
 
   static auto undefined_to_transfer_dst(VkCommandBuffer cmd_buffer,
                                         VkImage image) -> void
@@ -258,6 +250,34 @@ public:
     vkCmdPipelineBarrier2(cmd_buffer, &dependency_info);
   }
 
+
+  static auto present_to_color_attachment(VkCommandBuffer cmd_buffer,
+                                          VkImage image) -> void
+  {
+    transition_custom(cmd_buffer,
+                      image,
+                      VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_GENERAL,
+                      VK_PIPELINE_STAGE_2_NONE,
+                      VK_ACCESS_2_NONE,
+                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                      VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+  }
+
+  static auto color_attachment_to_present(VkCommandBuffer cmd_buffer,
+                                          VkImage image) -> void
+  {
+    transition_custom(cmd_buffer,
+                      image,
+                      VK_IMAGE_LAYOUT_GENERAL,
+                      VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                      VK_PIPELINE_STAGE_2_NONE,
+                      VK_ACCESS_2_NONE);
+  }
+
 private:
   static auto default_color_range() -> VkImageSubresourceRange
   {
@@ -309,6 +329,18 @@ swapchain_image(VkCommandBuffer cmd_buffer,
 {
   ImageTransition::transition_swapchain(
     cmd_buffer, image, old_layout, new_layout);
+}
+
+inline auto
+acquire_swapchain_for_rendering(VkCommandBuffer cmd_buffer, VkImage image)
+  -> void
+{
+  ImageTransition::present_to_color_attachment(cmd_buffer, image);
+}
+inline auto
+release_swapchain_for_present(VkCommandBuffer cmd_buffer, VkImage image) -> void
+{
+  ImageTransition::color_attachment_to_present(cmd_buffer, image);
 }
 }
 

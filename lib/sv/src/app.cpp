@@ -271,168 +271,23 @@ App::create(const ApplicationConfiguration& config)
                                                   std::move(tmp) };
 }
 
-auto
-App::create_swapchain() -> bool
-{
-  if (swapchain.swapchain)
-    destroy_swapchain();
 
-  vkb::SwapchainBuilder b{ context->get_device_wrapper(),
-                           context->get_surface() };
-  auto ret =
-    b.set_desired_extent(swapchain_extent.width, swapchain_extent.height)
-      .set_image_usage_flags(VK_IMAGE_USAGE_SAMPLED_BIT |
-                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
-      .set_desired_min_image_count(vkb::SwapchainBuilder::TRIPLE_BUFFERING)
-      .set_desired_present_mode(app_config.mode == PresentMode::FIFO
-                                  ? VK_PRESENT_MODE_FIFO_KHR
-                                  : VK_PRESENT_MODE_MAILBOX_KHR)
-      .build();
-  if (!ret)
-    return false;
-  swapchain = ret.value();
-
-  auto imgs = swapchain.get_images();
-  if (!imgs) {
-    return false;
-  }
-
-  swapchain_format = swapchain.image_format;
-  swapchain_extent = swapchain.extent;
-  swapchain_usage_flags = swapchain.image_usage_flags;
-
-  auto actual_images = std::move(imgs.value());
-  auto i = 0;
-  images.resize(actual_images.size());
-  for (auto& img : actual_images) {
-    VulkanTextureND image = {
-      .image = img,
-      .usage_flags = swapchain_usage_flags | VK_IMAGE_USAGE_SAMPLED_BIT,
-      .extent = VkExtent3D{ .width = swapchain_extent.width,
-                            .height = swapchain_extent.height,
-                            .depth = 1 },
-      .type = VK_IMAGE_TYPE_2D,
-      .format = swapchain_format,
-      .is_swapchain_image = true,
-      .is_owning_image = false,
-      .is_depth_format = false,   // format_is_depth(swapchain_format),
-      .is_stencil_format = false, // format_is_stencil(swapchain_format),
-    };
-
-    image.image_view = image.create_image_view(*context,
-                                               swapchain_format,
-                                               VK_IMAGE_ASPECT_COLOR_BIT,
-                                               "Swapchain Image",
-                                               1);
-
-    images[i] = context->get_texture_pool().insert(std::move(image));
-    i++;
-  }
-
-  image_present_sems.clear();
-  image_present_sems.resize(images.size());
-  VkSemaphoreCreateInfo sci{};
-  sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-  i = 0;
-  for (auto& sem : image_present_sems) {
-    if (vkCreateSemaphore(context->get_device(), &sci, nullptr, &sem) !=
-        VK_SUCCESS) {
-      return false;
-    }
-
-    set_name(
-      *context, sem, VK_OBJECT_TYPE_SEMAPHORE, "Present Semaphore {}", i);
-    i++;
-  }
-  return true;
-}
-
-auto
-App::destroy_swapchain() -> void
-{
-  if (context) {
-    for (auto sem : image_present_sems)
-      vkDestroySemaphore(context->get_device(), sem, nullptr);
-  }
-  image_present_sems.clear();
-  for (auto& image : images) {
-    context->destroy(image);
-  }
-  images.clear();
-  if (swapchain.swapchain)
-    vkb::destroy_swapchain(swapchain);
-  swapchain = {};
-}
-
-auto
-App::create_frame_sync(uint32_t in_flight) -> bool
-{
-  VkSemaphoreTypeCreateInfo ti{
-    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
-    .pNext = nullptr,
-    .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
-    .initialValue = 0,
-  };
-  VkSemaphoreCreateInfo tci{
-    VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-    &ti,
-    0,
-  };
-  if (vkCreateSemaphore(
-        context->get_device(), &tci, nullptr, &timeline.render_timeline) !=
-      VK_SUCCESS) {
-    return false;
-  }
-  set_name(*context,
-           timeline.render_timeline,
-           VK_OBJECT_TYPE_SEMAPHORE,
-           "Render timeline");
-  context->enqueue_destruction([ptr = timeline.render_timeline](IContext& ctx) {
-    vkDestroySemaphore(ctx.get_device(), ptr, nullptr);
-  });
-  timeline.next_value = 1;
-
-  frames.resize(in_flight);
-  VkSemaphoreCreateInfo sci{};
-  sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-  auto i = 0;
-  for (auto& f : frames) {
-    if (vkCreateSemaphore(context->get_device(), &sci, nullptr, &f.acquire) !=
-        VK_SUCCESS) {
-      return false;
-    }
-    context->enqueue_destruction([ptr = f.acquire](IContext& ctx) {
-      vkDestroySemaphore(ctx.get_device(), ptr, nullptr);
-    });
-    set_name(
-      *context, f.acquire, VK_OBJECT_TYPE_SEMAPHORE, "Acquire Semaphore {}", i);
-    i++;
-
-    f.render_done_value = 0;
-  }
-  frame_cursor = 0;
-  return true;
-}
-
-auto
-App::destroy_frame_sync() -> void
-{
-  frames.clear();
-  timeline = {};
-}
 
 auto
 App::attach_context(IContext& ctx) -> bool
 {
   context = &ctx;
 
-  context->initialise_resources();
+  glfwSetWindowUserPointer(static_cast<GLFWwindow*>(window->opaque_handle),
+                           &ctx);
 
-  if (!create_swapchain())
-    return false;
-  if (!create_frame_sync(2))
-    return false;
+  glfwSetFramebufferSizeCallback(
+    static_cast<GLFWwindow*>(window->opaque_handle), [](GLFWwindow* win, int w, int h) -> void {
+      auto* glfw_context =
+        static_cast<IContext*>(glfwGetWindowUserPointer(win));
+      glfw_context->recreate_swapchain(w, h);
+      });
+
   return true;
 }
 
@@ -443,108 +298,7 @@ App::detach_context() -> void
     return;
   vkQueueWaitIdle(context->get_graphics_queue());
   vkDeviceWaitIdle(context->get_device());
-  destroy_frame_sync();
-  destroy_swapchain();
   context = nullptr;
 }
 
-auto
-App::acquire_frame() -> std::optional<AcquiredFrame>
-{
-  if (auto* vk_context = dynamic_cast<VulkanContext*>(context)) {
-    Bindless<VulkanContext>::sync_on_frame_acquire(*vk_context);
-  }
-
-  auto& f = frames[frame_cursor];
-  wait_frame_done(context->get_device(), timeline, f);
-
-  std::uint32_t index{};
-  auto res = vkAcquireNextImageKHR(context->get_device(),
-                                   swapchain.swapchain,
-                                   UINT64_MAX,
-                                   f.acquire,
-                                   VK_NULL_HANDLE,
-                                   &index);
-  if (res == VK_ERROR_OUT_OF_DATE_KHR) {
-    destroy_swapchain();
-    create_swapchain();
-    return std::nullopt;
-  }
-  if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
-    return std::nullopt;
-
-  AcquiredFrame af{};
-  af.image_index = index;
-  af.image = images[index];
-  af.extent = swapchain_extent;
-  af.acquire = f.acquire;
-  af.present = image_present_sems[index];
-  return af;
-}
-
-auto
-App::submit_frame(const AcquiredFrame& af) -> bool
-{
-  auto& f = frames[frame_cursor];
-
-  VkSemaphoreSubmitInfo w_acq{
-    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-    .pNext = nullptr,
-    .semaphore = af.acquire,
-    .value = 0,
-    .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-    .deviceIndex = 0,
-  };
-  const std::uint64_t signal_value = timeline.next_value++;
-  VkSemaphoreSubmitInfo s_timeline{
-    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-    .pNext = nullptr,
-    .semaphore = timeline.render_timeline,
-    .value = signal_value,
-    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-    .deviceIndex = 0,
-  };
-
-  VkSemaphoreSubmitInfo s_present{
-    .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-    .pNext = nullptr,
-    .semaphore = af.present,
-    .value = 0,
-    .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-    .deviceIndex = 0,
-  };
-
-  VkSubmitInfo2 si{};
-  si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-  si.waitSemaphoreInfoCount = 1;
-  si.pWaitSemaphoreInfos = &w_acq;
-  VkSemaphoreSubmitInfo signals[2] = { s_timeline, s_present };
-  si.signalSemaphoreInfoCount = 2;
-  si.pSignalSemaphoreInfos = signals;
-
-  vkQueueSubmit2(context->get_graphics_queue(), 1, &si, VK_NULL_HANDLE);
-
-  VkPresentInfoKHR pi{};
-  pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-  pi.waitSemaphoreCount = 1;
-  pi.pWaitSemaphores = &af.present;
-  VkSwapchainKHR sc = swapchain.swapchain;
-  pi.swapchainCount = 1;
-  pi.pSwapchains = &sc;
-  pi.pImageIndices = &af.image_index;
-
-  auto pr = vkQueuePresentKHR(context->get_present_queue(), &pi);
-
-  f.render_done_value = signal_value;
-
-  if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
-    vkQueueWaitIdle(context->get_present_queue());
-    destroy_swapchain();
-    create_swapchain();
-    frame_cursor = (frame_cursor + 1) % static_cast<uint32_t>(frames.size());
-    return false;
-  }
-  frame_cursor = (frame_cursor + 1) % static_cast<uint32_t>(frames.size());
-  return pr == VK_SUCCESS;
-}
 }

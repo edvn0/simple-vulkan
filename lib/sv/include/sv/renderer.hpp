@@ -1,6 +1,6 @@
 #pragma once
 
-#include "sv/context.hpp"
+#include "sv/abstract_context.hpp"
 #include "sv/object_holder.hpp"
 
 #include <vulkan/vulkan.h>
@@ -8,7 +8,6 @@
 namespace sv {
 
 struct IContext;
-struct AcquiredFrame;
 
 class Renderer
 {
@@ -19,7 +18,7 @@ private:
 
 public:
   Renderer(IContext&);
-  auto record(const AcquiredFrame&) -> void;
+   auto record(ICommandBuffer&, TextureHandle)->void;
 };
 
 }
