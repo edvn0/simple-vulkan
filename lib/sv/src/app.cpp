@@ -269,7 +269,6 @@ App::create(const ApplicationConfiguration& config)
                                                   std::move(tmp) };
 }
 
-
 auto
 App::create_swapchain() -> bool
 {
@@ -295,6 +294,19 @@ App::create_swapchain() -> bool
 
   images = std::move(imgs.value());
   views = std::move(vws.value());
+
+  auto i = 0;
+  for (auto& img : images) {
+    set_name(*context, img, VK_OBJECT_TYPE_IMAGE, "SwapchainImage::{}", i);
+    i++;
+  }
+  i = 0;
+  for (auto& img : views) {
+    set_name(
+      *context, img, VK_OBJECT_TYPE_IMAGE_VIEW, "SwapchainImageView::{}", i);
+    i++;
+  }
+
   swapchain_format = swapchain.image_format;
   swapchain_extent = swapchain.extent;
 
@@ -302,10 +314,16 @@ App::create_swapchain() -> bool
   image_present_sems.resize(images.size());
   VkSemaphoreCreateInfo sci{};
   sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+  i = 0;
   for (auto& sem : image_present_sems) {
     if (vkCreateSemaphore(context->get_device(), &sci, nullptr, &sem) !=
-        VK_SUCCESS)
+        VK_SUCCESS) {
       return false;
+    }
+
+    set_name(
+      *context, sem, VK_OBJECT_TYPE_SEMAPHORE, "Present Semaphore {}", i);
+    i++;
   }
   return true;
 }
@@ -346,15 +364,10 @@ App::create_frame_sync(uint32_t in_flight) -> bool
       VK_SUCCESS) {
     return false;
   }
-  VkDebugUtilsObjectNameInfoEXT name_info{};
-  name_info.objectHandle =
-    reinterpret_cast<std::uint64_t>(timeline.render_timeline);
-  name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-  name_info.objectType = VK_OBJECT_TYPE_SEMAPHORE;
-  name_info.pObjectName = "Render timeline";
-  if (auto ctx = dynamic_cast<VulkanContext*>(context)) {
-  ctx->dispatch(&vkb::DispatchTable::fp_vkSetDebugUtilsObjectNameEXT, context->get_device(), &name_info);
-  }
+  set_name(*context,
+           timeline.render_timeline,
+           VK_OBJECT_TYPE_SEMAPHORE,
+           "Render timeline");
   context->enqueue_destruction([ptr = timeline.render_timeline](IContext& ctx) {
     vkDestroySemaphore(ctx.get_device(), ptr, nullptr);
   });
@@ -364,10 +377,18 @@ App::create_frame_sync(uint32_t in_flight) -> bool
   VkSemaphoreCreateInfo sci{};
   sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
+  auto i = 0;
   for (auto& f : frames) {
     if (vkCreateSemaphore(context->get_device(), &sci, nullptr, &f.acquire) !=
-        VK_SUCCESS)
+        VK_SUCCESS) {
       return false;
+    }
+    context->enqueue_destruction([ptr = f.acquire](IContext& ctx) {
+      vkDestroySemaphore(ctx.get_device(), ptr, nullptr);
+    });
+    set_name(
+      *context, f.acquire, VK_OBJECT_TYPE_SEMAPHORE, "Acquire Semaphore {}", i);
+    i++;
 
     f.render_done_value = 0;
   }

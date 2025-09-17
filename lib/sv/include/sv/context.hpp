@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sv/abstract_context.hpp"
 #include "sv/app.hpp"
 #include "sv/bindless_access.hpp"
 #include "sv/buffer.hpp"
@@ -7,8 +8,6 @@
 #include "sv/object_handle.hpp"
 #include "sv/object_pool.hpp"
 #include "sv/staging_allocator.hpp"
-#include "sv/texture.hpp"
-#include "vulkan/vulkan_core.h"
 
 #include <VkBootstrap.h>
 #include <deque>
@@ -46,51 +45,34 @@ struct ContextError
   std::string message;
 };
 
-struct IContext
+namespace detail {
+template<auto Member, class... Args>
+auto
+dispatch_member(const vkb::DispatchTable& tbl, Args&&... args)
+  -> std::invoke_result_t<decltype(std::declval<const vkb::DispatchTable&>().*
+                                   Member),
+                          Args...>
 {
-  virtual ~IContext() = default;
-  [[nodiscard]] virtual auto get_instance() const -> VkInstance = 0;
-  [[nodiscard]] virtual auto get_physical_device() const
-    -> VkPhysicalDevice = 0;
-  [[nodiscard]] virtual auto get_device() const -> VkDevice = 0;
-  [[nodiscard]] virtual auto get_device_wrapper() const
-    -> const vkb::Device& = 0;
-  [[nodiscard]] virtual auto get_graphics_queue() const -> VkQueue = 0;
-  [[nodiscard]] virtual auto get_present_queue() const -> VkQueue = 0;
-  [[nodiscard]] virtual auto get_graphics_queue_family() const
-    -> std::uint32_t = 0;
-  [[nodiscard]] virtual auto get_present_queue_family() const
-    -> std::uint32_t = 0;
-  [[nodiscard]] virtual auto get_surface() const -> VkSurfaceKHR = 0;
-  virtual auto initialise_resources() -> void {};
-  virtual auto update_resources() -> void = 0;
+  using fn_ptr_t = decltype(std::declval<const vkb::DispatchTable&>().*Member);
+  static_assert(!std::is_same_v<fn_ptr_t, void*>,
+                "Function not available in this build.");
 
-  virtual auto enqueue_destruction(std::function<void(IContext&)>&& f)
-    -> void = 0;
-  virtual auto defer_task(std::function<void(IContext&)>&& f) -> void = 0;
+  auto fn = tbl.*Member;
+  using ret_t = std::invoke_result_t<fn_ptr_t, Args...>;
 
-  virtual auto get_texture_pool() -> TexturePool& = 0;
-  virtual auto destroy(TextureHandle) -> void = 0;
+  if (!fn) {
+    if constexpr (std::is_same_v<ret_t, VkResult>)
+      return VK_ERROR_EXTENSION_NOT_PRESENT;
+    else
+      throw std::runtime_error("Vulkan function not loaded.");
+  }
 
-  virtual auto destroy(GraphicsPipelineHandle) -> void = 0;
-  virtual auto destroy(ComputePipelineHandle) -> void = 0;
-
-  virtual auto get_buffer_pool() -> BufferPool& = 0;
-  virtual auto destroy(BufferHandle) -> void = 0;
-
-  struct OffsetSize
-  {
-    const VkDeviceSize offset;
-    const VkDeviceSize size;
-  };
-  virtual auto flush_mapped_memory(BufferHandle, OffsetSize) const -> void = 0;
-  virtual auto invalidate_mapped_memory(BufferHandle, OffsetSize) const
-    -> void = 0;
-
-  virtual auto get_immediate_commands() -> ImmediateCommands& = 0;
-  virtual auto get_staging_allocator() -> StagingAllocator& = 0;
-
-};
+  if constexpr (std::is_same_v<ret_t, void>)
+    return fn(std::forward<Args>(args)...);
+  else
+    return fn(std::forward<Args>(args)...);
+}
+}
 
 class VulkanContext final : public IContext
 {
@@ -112,6 +94,8 @@ class VulkanContext final : public IContext
   VkQueue present_queue{};
   std::uint32_t graphics_family{};
   std::uint32_t present_family{};
+
+  static inline ContextConfiguration config;
 
   TexturePool textures;
   BufferPool buffers;
@@ -190,7 +174,8 @@ public:
   auto initialise_resources() -> void override
   {
     staging_allocator = std::make_unique<StagingAllocator>(*this);
-    immediate_commands = std::make_unique<ImmediateCommands>(*this, "Debug?");
+    immediate_commands =
+      std::make_unique<ImmediateCommands>(*this, "ImmediateCommands");
     create_placeholder_resources();
   }
   auto update_resources() -> void override { needs_descriptor_update = true; }
@@ -210,7 +195,8 @@ public:
   auto invalidate_mapped_memory(BufferHandle, OffsetSize) const
     -> void override;
 
-  auto get_immediate_commands() -> ImmediateCommands & override {
+  auto get_immediate_commands() -> ImmediateCommands& override
+  {
     return *immediate_commands;
   }
   auto get_staging_allocator() -> StagingAllocator& override
@@ -218,19 +204,20 @@ public:
     return *staging_allocator;
   }
 
-
-template<auto member, class... Args>
+  template<auto Member, class... Args>
   auto dispatch(Args&&... args) const
-    -> decltype(std::declval<
-                std::remove_pointer_t<decltype(dispatch_table.*member)>>()(
-      std::forward<Args>(args)...))
+    -> std::invoke_result_t<decltype(std::declval<const vkb::DispatchTable&>().*
+                                     Member),
+                            Args...>
   {
-    auto fn = dispatch_table.*member;
-    return fn(std::forward<Args>(args)...);
+    return detail::dispatch_member<Member>(dispatch_table,
+                                           std::forward<Args>(args)...);
   }
-  static auto create(const Window&)
+
+  static auto create(const Window&, const ContextConfiguration& = {})
     -> std::expected<std::unique_ptr<IContext>, ContextError>;
 };
+#define VKB_MEMBER(name) &vkb::DispatchTable::fp_##name
 
 template<>
 struct BindlessAccess<VulkanContext>

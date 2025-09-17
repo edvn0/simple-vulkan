@@ -2,6 +2,7 @@
 #include "sv/common.hpp"
 
 #include "sv/context.hpp"
+#include "vulkan/vulkan_core.h"
 
 namespace sv {
 
@@ -14,7 +15,7 @@ create_buffer(IContext& ctx,
               VkDeviceSize buffer_size,
               VkBufferUsageFlags usage_flags,
               VkMemoryPropertyFlags memory_flags,
-              const std::string_view) -> BufferHandle
+              const std::string_view name) -> BufferHandle
 {
   VulkanDeviceBuffer buf = {
     .usage_flags = usage_flags,
@@ -61,6 +62,7 @@ create_buffer(IContext& ctx,
                   &buf.allocation,
                   &buf.allocation_info);
 
+  set_name(ctx, buf.buffer, VK_OBJECT_TYPE_BUFFER, "Buffer::{}", name);
   // setDebugObjectName(
   //   vkDevice_, VK_OBJECT_TYPE_BUFFER, (uint64_t)buf.vkBuffer_, debugName);
   if (usage_flags & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) {
@@ -81,13 +83,13 @@ VulkanDeviceBuffer::create(IContext& ctx, const BufferDescription& w)
   -> Holder<BufferHandle>
 {
   BufferDescription description{ w };
-  if constexpr (!use_staging &&
-                (description.storage & StorageType::Device) != StorageType{0}) {
+  if constexpr (!use_staging && (description.storage & StorageType::Device) !=
+                                  StorageType{ 0 }) {
     description.storage = StorageType::HostVisible;
   }
 
   VkBufferUsageFlags usage_flags =
-    (description.storage & StorageType::Device) != StorageType{0}
+    (description.storage & StorageType::Device) != StorageType{ 0 }
       ? VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT
       : 0;
 
@@ -116,11 +118,17 @@ VulkanDeviceBuffer::create(IContext& ctx, const BufferDescription& w)
     memory_flags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
   }
 
+  assert(!description.debug_name.empty());
   const auto handle = create_buffer(
     ctx, description.size, usage_flags, memory_flags, description.debug_name);
+  auto* buffer = ctx.get_buffer_pool().get(handle);
+  set_name(ctx,
+           buffer->allocation_info.deviceMemory,
+           VK_OBJECT_TYPE_DEVICE_MEMORY,
+           "DeviceMemory::::{}",
+           description.debug_name);
 
   if (!description.data.empty()) {
-    auto* buffer = ctx.get_buffer_pool().get(handle);
     buffer->upload(description.data);
     ctx.flush_mapped_memory(handle,
                             {
@@ -135,13 +143,12 @@ auto
 VulkanDeviceBuffer::upload(const std::span<const std::byte> data,
                            std::uint64_t offset) -> void
 {
-  assert(allocation_info.pMappedData != nullptr && "Something strange has happened here!");
+  assert(allocation_info.pMappedData != nullptr &&
+         "Something strange has happened here!");
 
   const auto size = data.size_bytes();
-  std::memcpy(
-    allocation_info.pMappedData, data.data() + offset, size);
-  vmaFlushAllocation(
-    DeviceAllocator::the(), allocation, offset, size);
+  std::memcpy(allocation_info.pMappedData, data.data() + offset, size);
+  vmaFlushAllocation(DeviceAllocator::the(), allocation, offset, size);
 }
 
 }

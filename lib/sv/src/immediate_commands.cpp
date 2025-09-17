@@ -1,6 +1,7 @@
 #include "sv/immediate_commands.hpp"
 
 #include "sv/context.hpp"
+#include "vulkan/vulkan_core.h"
 
 #include <cassert>
 #include <format>
@@ -10,40 +11,38 @@
 namespace sv {
 
 static auto
-create_semaphore(VkDevice device, std::string_view)
+create_semaphore(const IContext& ctx, const std::string_view name)
 {
+  assert(!name.empty());
   VkSemaphore semaphore;
   VkSemaphoreCreateInfo create_info{
     .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
     .pNext = nullptr,
     .flags = 0,
   };
-  if (vkCreateSemaphore(device, &create_info, nullptr, &semaphore) !=
+  if (vkCreateSemaphore(ctx.get_device(), &create_info, nullptr, &semaphore) !=
       VK_SUCCESS) {
     throw std::runtime_error("Failed to create semaphore");
   }
-  /*if (!name.empty()) {
-    set_name_for_object(device, VK_OBJECT_TYPE_SEMAPHORE, semaphore,
-  name);
-  }*/
+  set_name(ctx, semaphore, VK_OBJECT_TYPE_SEMAPHORE, "{}", name);
   return semaphore;
 }
 
 static auto
-create_fence(VkDevice device, const std::string_view)
+create_fence(const IContext& ctx, const std::string_view name)
 {
+  assert(!name.empty());
   VkFence fence;
   VkFenceCreateInfo create_info{
     .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
     .pNext = nullptr,
     .flags = 0,
   };
-  if (vkCreateFence(device, &create_info, nullptr, &fence) != VK_SUCCESS) {
+  if (vkCreateFence(ctx.get_device(), &create_info, nullptr, &fence) !=
+      VK_SUCCESS) {
     throw std::runtime_error("Failed to create fence");
   }
-  /*if (!name.empty()) {
-    set_name_for_object(device, VK_OBJECT_TYPE_FENCE, fence, name);
-  }*/
+  set_name(ctx, fence, VK_OBJECT_TYPE_FENCE, "{}", name);
   return fence;
 }
 
@@ -60,6 +59,11 @@ ImmediateCommands::ImmediateCommands(IContext& ctx, std::string_view debug_name)
     .queueFamilyIndex = queue_family_index,
   };
   vkCreateCommandPool(ctx.get_device(), &pool_info, nullptr, &command_pool);
+  set_name(ctx,
+           command_pool,
+           VK_OBJECT_TYPE_COMMAND_POOL,
+           "CommandPool::{}",
+           debug_name);
 
   const VkCommandBufferAllocateInfo ai = {
     .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -70,16 +74,17 @@ ImmediateCommands::ImmediateCommands(IContext& ctx, std::string_view debug_name)
   };
   for (auto i = 0U; i < max_command_buffers; i++) {
     auto& buf = command_buffers[i];
-    if (!debug_name.empty()) {
-      // ... assign debug names to fenceName and semaphoreName
-    }
-
-    buf.semaphore = create_semaphore(ctx.get_device(),
-                                     std::format("{}_semaphore", debug_name));
-    buf.fence =
-      create_fence(ctx.get_device(), std::format("{}_fence", debug_name));
+    buf.semaphore =
+      create_semaphore(ctx, std::format("Semaphore_{}::{}", i, debug_name));
+    buf.fence = create_fence(ctx, std::format("Fence_{}::{}", i, debug_name));
     vkAllocateCommandBuffers(
       ctx.get_device(), &ai, &buf.command_buffer_allocated);
+    set_name(ctx,
+             buf.command_buffer_allocated,
+             VK_OBJECT_TYPE_COMMAND_BUFFER,
+             "CommandBuffer_{}::{}",
+             i,
+             debug_name);
     buf.handle.buffer_index = i;
   }
 }

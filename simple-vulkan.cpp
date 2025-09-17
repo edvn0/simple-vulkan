@@ -32,7 +32,10 @@ main(int argc, char** argv)
     return 1;
   auto app = std::move(maybe_app.value());
 
-  auto maybe_ctx = VulkanContext::create(app.get_window());
+  auto maybe_ctx = VulkanContext::create(app.get_window(),
+                                         {
+                                           .abort_on_validation_error = true,
+                                         });
   if (!maybe_ctx)
     return 1;
   auto context = std::move(maybe_ctx.value());

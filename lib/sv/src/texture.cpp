@@ -1,5 +1,6 @@
 #include "sv/texture.hpp"
 
+#include "sv/common.hpp"
 #include "sv/context.hpp"
 #include "vulkan/vulkan_core.h"
 #include <format>
@@ -238,11 +239,10 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
     usage_flags |= is_depth_or_stencil_format(desc.format)
                      ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                      : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    if ((desc.storage & StorageType::Transient) != StorageType{0}) {
+    if ((desc.storage & StorageType::Transient) != StorageType{ 0 }) {
       usage_flags |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
     }
   }
-    
 
   if (desc.storage != StorageType::Transient) {
     usage_flags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -250,8 +250,8 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
   const VkMemoryPropertyFlags memory_flags =
     storage_type_to_vk_memory_property_flags(desc.storage);
 
-  const auto image_debug_name = std::format("Image{}", desc.debug_name);
-  const auto view_debug_name = std::format("ImageView{}", desc.debug_name);
+  const auto image_debug_name = std::format("Image::{}", desc.debug_name);
+  const auto view_debug_name = std::format("ImageView::{}", desc.debug_name);
 
   VkImageCreateFlags create_flags = 0;
   VkImageViewType image_view_type{ VK_IMAGE_VIEW_TYPE_2D };
@@ -296,6 +296,7 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
     .layer_count = layer_count,
     .is_depth_format = format_is_depth(vulkan_format),
     .is_stencil_format = format_is_stencil(vulkan_format),
+    .debug_name = std::string{ desc.debug_name },
   };
 
   const VkImageCreateInfo ci = {
@@ -331,9 +332,8 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
                  &image.allocation,
                  &image.allocation_info);
 
-  // set_debug_object_name(
-  //   vkDevice_, VK_OBJECT_TYPE_IMAGE, (uint64_t)image.vkImage_,
-  //   debugNameImage);
+  set_name(
+    ctx, image.image, VK_OBJECT_TYPE_IMAGE, "{}_Image", image_debug_name);
   vkGetPhysicalDeviceFormatProperties(
     ctx.get_physical_device(), image.format, &image.format_properties);
 
@@ -357,7 +357,7 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
   image.image_view = image.create_image_view(ctx,
                                              vulkan_format,
                                              aspect,
-                                             image_debug_name,
+                                             view_debug_name,
                                              VK_REMAINING_MIP_LEVELS,
                                              layer_count,
                                              image_view_type,
@@ -368,7 +368,7 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
         image.create_image_view(ctx,
                                 vulkan_format,
                                 aspect,
-                                image_debug_name,
+                                view_debug_name,
                                 VK_REMAINING_MIP_LEVELS,
                                 layer_count,
                                 image_view_type,
@@ -377,17 +377,29 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
   }
 
   TextureHandle handle = ctx.get_texture_pool().insert(std::move(image));
+
+  auto* image_ptr = ctx.get_texture_pool().get(handle);
+  set_name(ctx,
+           image_ptr->allocation_info.deviceMemory,
+           VK_OBJECT_TYPE_DEVICE_MEMORY,
+           "DeviceMemory::{}",
+           image_debug_name);
+
   ctx.update_resources();
   if (!desc.pixel_data.empty()) {
-    ctx.get_staging_allocator().upload(handle,
-      VkRect2D{ .offset = { 0, 0 }, .extent = {extent.width, extent.height},
-                                       },
-                                       0,
-                                       level_count,
-                                       0,
-                                       layer_count,
-                                       vulkan_format,
-                                       desc.pixel_data.data(), 0);
+    ctx.get_staging_allocator().upload(
+      handle,
+      VkRect2D{
+        .offset = { 0, 0 },
+        .extent = { extent.width, extent.height },
+      },
+      0,
+      level_count,
+      0,
+      layer_count,
+      vulkan_format,
+      desc.pixel_data.data(),
+      0);
     /*if (desc.generate_mipmaps)
       ctx.generate_mipmaps(handle);*/
   }
@@ -398,7 +410,7 @@ auto
 VulkanTextureND::create_image_view(IContext& ctx,
                                    VkFormat override_format,
                                    VkImageAspectFlags aspect,
-                                   std::string_view,
+                                   std::string_view name,
                                    std::uint32_t override_level_count,
                                    std::uint32_t override_layer_count,
                                    VkImageViewType override_type,
@@ -408,6 +420,7 @@ VulkanTextureND::create_image_view(IContext& ctx,
                                    const VkSamplerYcbcrConversionInfo* ycbcr)
   -> VkImageView
 {
+  assert(!name.empty());
   const VkImageViewCreateInfo ci = {
     .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
     .pNext = ycbcr,
@@ -425,8 +438,7 @@ VulkanTextureND::create_image_view(IContext& ctx,
   };
   VkImageView view = VK_NULL_HANDLE;
   vkCreateImageView(ctx.get_device(), &ci, nullptr, &view);
-  // lvk::setDebugObjectName(
-  //   device, VK_OBJECT_TYPE_IMAGE_VIEW, (uint64_t)vkView, debugName);
+  set_name(ctx, view, VK_OBJECT_TYPE_IMAGE_VIEW, "{}", name);
   return view;
 }
 auto
@@ -439,7 +451,11 @@ VulkanTextureND::get_or_create_image_view_for_framebuffer(IContext& ctx,
 
   if (cached == VK_NULL_HANDLE) {
     cached = create_image_view(
-      ctx, format, VK_IMAGE_ASPECT_COLOR_BIT, std::format("Framebuffer[{}{}]", level, layer), 1);
+      ctx,
+      format,
+      VK_IMAGE_ASPECT_COLOR_BIT,
+      std::format("ImageView::Framebuffer_{}{}_::{}", level, layer, debug_name),
+      1);
   }
 
   return cached;

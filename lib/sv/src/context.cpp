@@ -20,7 +20,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL
 vk_debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                   VkDebugUtilsMessageTypeFlagsEXT messageType,
                   const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-                  void*)
+                  void* user_data)
 {
   auto ms = vkb::to_string_message_severity(messageSeverity);
   auto mt = vkb::to_string_message_type(messageType);
@@ -37,6 +37,14 @@ vk_debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
     out << std::format("[{}: {}]\n{}\n", ms, mt, pCallbackData->pMessage);
   }
   std::flush(out);
+
+  if (const auto user = static_cast<ContextConfiguration*>(user_data)) {
+    if (user->abort_on_validation_error &&
+        ((messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) !=
+         0)) {
+      _CrtDbgBreak();
+    }
+  }
 
   return VK_FALSE;
 }
@@ -70,7 +78,7 @@ VulkanContext::~VulkanContext()
 }
 
 auto
-VulkanContext::create(const Window& window)
+VulkanContext::create(const Window& window, const ContextConfiguration& conf)
   -> std::expected<std::unique_ptr<IContext>, ContextError>
 {
   using enum ContextError::Code;
@@ -78,11 +86,15 @@ VulkanContext::create(const Window& window)
   if (!ptr)
     return make_error(ContextError{ InvalidWindow, "Window not initialised" });
 
+  VulkanContext::config = conf;
+
   vkb::InstanceBuilder instance_builder;
-  auto instance_ret = instance_builder.require_api_version(1, 4)
-                        .set_debug_callback(vk_debug_callback)
-                        .request_validation_layers()
-                        .build();
+  auto instance_ret =
+    instance_builder.require_api_version(1, 4)
+      .set_debug_callback(vk_debug_callback)
+      .set_debug_callback_user_data_pointer(&VulkanContext::config)
+      .request_validation_layers()
+      .build();
   if (!instance_ret) {
     std::cout << instance_ret.error().message() << "\n";
     const auto& detailed_reasons = instance_ret.detailed_failure_reasons();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common.hpp"
 #include "sv/bindless_access.hpp"
 #include "vulkan/vulkan_core.h"
 
@@ -74,6 +75,10 @@ public:
 
     vkCreateDescriptorSetLayout(
       BindlessAccess<Ctx>::device(ctx), &dsl_ci, nullptr, &desc.layout);
+    set_name(ctx,
+             desc.layout,
+             VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
+             "Bindless DescriptorLayout");
     BindlessAccess<Ctx>::enqueue_destruction(
       ctx, [ptr = desc.layout](auto& context) {
         vkDestroyDescriptorSetLayout(context.get_device(), ptr, nullptr);
@@ -111,6 +116,10 @@ public:
     };
 
     vkCreateDescriptorPool(dev, &dp_ci, nullptr, &desc.pool);
+    set_name(ctx,
+             desc.pool,
+             VK_OBJECT_TYPE_DESCRIPTOR_POOL,
+             "Bindless Descriptor Pool");
     BindlessAccess<Ctx>::enqueue_destruction(
       ctx, [ptr = desc.pool](auto& context) {
         vkDestroyDescriptorPool(context.get_device(), ptr, nullptr);

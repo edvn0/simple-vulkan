@@ -46,6 +46,7 @@ struct VulkanTextureND
   std::uint32_t layer_count{ 1 };
   bool is_depth_format = false;
   bool is_stencil_format = false;
+  std::string debug_name{};
   mutable VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
   VkImageView image_view = VK_NULL_HANDLE;         // all levels
   VkImageView storage_image_view = VK_NULL_HANDLE; // identity swizzle

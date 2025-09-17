@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstdint>
 #include <expected>
+#include <format>
 #include <glm/glm.hpp>
 #include <span>
 #include <string>
@@ -795,6 +796,24 @@ storage_type_to_vk_memory_property_flags(StorageType storage)
       break;
   }
   return memory_flags;
+}
+
+auto
+set_name(const IContext&, const std::uint64_t, VkObjectType, std::string_view)
+  -> void;
+template<typename... Args>
+inline auto
+set_name(const IContext& ctx,
+         const auto vk_object,
+         const VkObjectType type,
+         const std::format_string<Args...> fmt,
+         Args&&... args) -> void
+{
+  static_assert(std::is_pointer_v<decltype(vk_object)>);
+  return set_name(ctx,
+                  reinterpret_cast<std::uint64_t>(vk_object),
+                  type,
+                  std::format(fmt, std::forward<Args>(args)...));
 }
 
 }
