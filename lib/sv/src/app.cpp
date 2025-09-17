@@ -4,6 +4,8 @@
 #include "sv/common.hpp"
 #include "sv/context.hpp"
 #include "sv/renderer.hpp"
+#include "sv/texture.hpp"
+#include "vulkan/vulkan_core.h"
 
 #include <GLFW/glfw3.h>
 #include <array>
@@ -278,7 +280,10 @@ App::create_swapchain() -> bool
   vkb::SwapchainBuilder b{ context->get_device_wrapper(),
                            context->get_surface() };
   auto ret =
-    b.set_desired_min_image_count(vkb::SwapchainBuilder::DOUBLE_BUFFERING)
+    b.set_desired_extent(swapchain_extent.width, swapchain_extent.height)
+      .set_image_usage_flags(VK_IMAGE_USAGE_SAMPLED_BIT |
+                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+      .set_desired_min_image_count(vkb::SwapchainBuilder::TRIPLE_BUFFERING)
       .set_desired_present_mode(app_config.mode == PresentMode::FIFO
                                   ? VK_PRESENT_MODE_FIFO_KHR
                                   : VK_PRESENT_MODE_MAILBOX_KHR)
@@ -288,27 +293,41 @@ App::create_swapchain() -> bool
   swapchain = ret.value();
 
   auto imgs = swapchain.get_images();
-  auto vws = swapchain.get_image_views();
-  if (!imgs || !vws)
+  if (!imgs) {
     return false;
-
-  images = std::move(imgs.value());
-  views = std::move(vws.value());
-
-  auto i = 0;
-  for (auto& img : images) {
-    set_name(*context, img, VK_OBJECT_TYPE_IMAGE, "SwapchainImage::{}", i);
-    i++;
-  }
-  i = 0;
-  for (auto& img : views) {
-    set_name(
-      *context, img, VK_OBJECT_TYPE_IMAGE_VIEW, "SwapchainImageView::{}", i);
-    i++;
   }
 
   swapchain_format = swapchain.image_format;
   swapchain_extent = swapchain.extent;
+  swapchain_usage_flags = swapchain.image_usage_flags;
+
+  auto actual_images = std::move(imgs.value());
+  auto i = 0;
+  images.resize(actual_images.size());
+  for (auto& img : actual_images) {
+    VulkanTextureND image = {
+      .image = img,
+      .usage_flags = swapchain_usage_flags | VK_IMAGE_USAGE_SAMPLED_BIT,
+      .extent = VkExtent3D{ .width = swapchain_extent.width,
+                            .height = swapchain_extent.height,
+                            .depth = 1 },
+      .type = VK_IMAGE_TYPE_2D,
+      .format = swapchain_format,
+      .is_swapchain_image = true,
+      .is_owning_image = false,
+      .is_depth_format = false,   // format_is_depth(swapchain_format),
+      .is_stencil_format = false, // format_is_stencil(swapchain_format),
+    };
+
+    image.image_view = image.create_image_view(*context,
+                                               swapchain_format,
+                                               VK_IMAGE_ASPECT_COLOR_BIT,
+                                               "Swapchain Image",
+                                               1);
+
+    images[i] = context->get_texture_pool().insert(std::move(image));
+    i++;
+  }
 
   image_present_sems.clear();
   image_present_sems.resize(images.size());
@@ -332,13 +351,13 @@ auto
 App::destroy_swapchain() -> void
 {
   if (context) {
-    for (auto v : views)
-      vkDestroyImageView(context->get_device(), v, nullptr);
     for (auto sem : image_present_sems)
       vkDestroySemaphore(context->get_device(), sem, nullptr);
   }
   image_present_sems.clear();
-  views.clear();
+  for (auto& image : images) {
+    context->destroy(image);
+  }
   images.clear();
   if (swapchain.swapchain)
     vkb::destroy_swapchain(swapchain);
@@ -457,7 +476,6 @@ App::acquire_frame() -> std::optional<AcquiredFrame>
   AcquiredFrame af{};
   af.image_index = index;
   af.image = images[index];
-  af.view = views[index];
   af.extent = swapchain_extent;
   af.acquire = f.acquire;
   af.present = image_present_sems[index];

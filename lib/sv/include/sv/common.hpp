@@ -816,4 +816,7 @@ set_name(const IContext& ctx,
                   std::format(fmt, std::forward<Args>(args)...));
 }
 
+auto
+format_to_vk_format(const Format format) -> VkFormat;
+
 }

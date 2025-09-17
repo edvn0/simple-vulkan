@@ -3,7 +3,8 @@
 #include <VkBootstrap.h>
 #include <vulkan/vulkan.h>
 
-
+#include "sv/abstract_command_buffer.hpp"
+#include "sv/object_handle.hpp"
 #include "sv/object_pool.hpp"
 
 namespace sv {
@@ -42,11 +43,20 @@ struct IContext
   virtual auto get_texture_pool() -> TexturePool& = 0;
   virtual auto destroy(TextureHandle) -> void = 0;
 
+  virtual auto get_graphics_pipeline_pool() -> GraphicsPipelinePool& = 0;
   virtual auto destroy(GraphicsPipelineHandle) -> void = 0;
+
+  virtual auto get_compute_pipeline_pool() -> ComputePipelinePool& = 0;
   virtual auto destroy(ComputePipelineHandle) -> void = 0;
+
+  virtual auto get_shader_module_pool() -> ShaderModulePool& = 0;
+  virtual auto destroy(ShaderModuleHandle) -> void = 0;
 
   virtual auto get_buffer_pool() -> BufferPool& = 0;
   virtual auto destroy(BufferHandle) -> void = 0;
+
+  virtual auto acquire_command_buffer() -> ICommandBuffer& = 0;
+  virtual auto submit(ICommandBuffer&, TextureHandle) -> void = 0;
 
   struct OffsetSize
   {

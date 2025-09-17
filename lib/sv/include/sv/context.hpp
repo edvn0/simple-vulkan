@@ -1,9 +1,11 @@
 #pragma once
 
+#include "sv/abstract_command_buffer.hpp"
 #include "sv/abstract_context.hpp"
 #include "sv/app.hpp"
 #include "sv/bindless_access.hpp"
 #include "sv/buffer.hpp"
+#include "sv/command_buffer.hpp"
 #include "sv/immediate_commands.hpp"
 #include "sv/object_handle.hpp"
 #include "sv/object_pool.hpp"
@@ -99,6 +101,10 @@ class VulkanContext final : public IContext
 
   TexturePool textures;
   BufferPool buffers;
+  GraphicsPipelinePool graphics_pipelines;
+  ComputePipelinePool compute_pipelines;
+  ShaderModulePool shader_modules;
+
   DescriptorArrays descriptors;
   friend struct BindlessAccess<VulkanContext>;
   bool needs_descriptor_update{ true };
@@ -111,6 +117,9 @@ class VulkanContext final : public IContext
 
   Holder<TextureHandle> dummy_texture;
   // Holder<TextureHandle> dummy_sampler;
+
+  CommandBuffer command_buffer;
+  friend class CommandBuffer;
 
   std::deque<std::function<void(IContext&)>> delete_queue;
   std::deque<std::function<void(IContext&)>> pre_frame_queue;
@@ -184,8 +193,35 @@ public:
   auto get_texture_pool() const -> const TexturePool& { return textures; }
   auto destroy(TextureHandle) -> void override;
 
+  auto get_graphics_pipeline_pool() -> GraphicsPipelinePool& override
+  {
+    return graphics_pipelines;
+  }
+  auto get_graphics_pipeline_pool() const -> const GraphicsPipelinePool&
+  {
+    return graphics_pipelines;
+  }
   auto destroy(GraphicsPipelineHandle) -> void override;
+
+  auto get_compute_pipeline_pool() -> ComputePipelinePool& override
+  {
+    return compute_pipelines;
+  }
+  auto get_compute_pipeline_pool() const -> const ComputePipelinePool&
+  {
+    return compute_pipelines;
+  }
   auto destroy(ComputePipelineHandle) -> void override;
+
+  auto get_shader_module_pool() -> ShaderModulePool& override
+  {
+    return shader_modules;
+  }
+  auto get_shader_module_pool() const -> const ShaderModulePool&
+  {
+    return shader_modules;
+  }
+  auto destroy(ShaderModuleHandle) -> void override;
 
   auto get_buffer_pool() -> BufferPool& override { return buffers; }
   auto get_buffer_pool() const -> const BufferPool& { return buffers; }
@@ -194,6 +230,14 @@ public:
   auto flush_mapped_memory(BufferHandle, OffsetSize) const -> void override;
   auto invalidate_mapped_memory(BufferHandle, OffsetSize) const
     -> void override;
+
+  auto acquire_command_buffer() -> ICommandBuffer& override
+  {
+    command_buffer = CommandBuffer{ *this };
+    return command_buffer;
+  }
+
+  auto submit(ICommandBuffer& cmd, TextureHandle) -> void override;
 
   auto get_immediate_commands() -> ImmediateCommands& override
   {
@@ -204,6 +248,9 @@ public:
     return *staging_allocator;
   }
 
+  auto get_pipeline(ComputePipelineHandle) -> VkPipeline;
+  auto get_pipeline(GraphicsPipelineHandle) -> VkPipeline;
+
   template<auto Member, class... Args>
   auto dispatch(Args&&... args) const
     -> std::invoke_result_t<decltype(std::declval<const vkb::DispatchTable&>().*
@@ -212,6 +259,23 @@ public:
   {
     return detail::dispatch_member<Member>(dispatch_table,
                                            std::forward<Args>(args)...);
+  }
+
+  auto bind_default_descriptor_sets(const VkCommandBuffer cmd,
+                                    const VkPipelineBindPoint bind_point,
+                                    const VkPipelineLayout layout) const -> void
+  {
+    const std::array dsets{
+      descriptors.set,
+    };
+    vkCmdBindDescriptorSets(cmd,
+                            bind_point,
+                            layout,
+                            0,
+                            static_cast<std::uint32_t>(dsets.size()),
+                            dsets.data(),
+                            0,
+                            nullptr);
   }
 
   static auto create(const Window&, const ContextConfiguration& = {})

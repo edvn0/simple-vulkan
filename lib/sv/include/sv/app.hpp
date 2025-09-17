@@ -1,5 +1,8 @@
 #pragma once
 
+#include "sv/object_handle.hpp"
+#include "sv/object_holder.hpp"
+#include "vulkan/vulkan_core.h"
 #include <VkBootstrap.h>
 #include <cstdint>
 #include <expected>
@@ -63,8 +66,7 @@ struct InitialisationError
 struct AcquiredFrame
 {
   std::uint32_t image_index{};
-  VkImage image{};
-  VkImageView view{};
+  TextureHandle image;
   VkExtent2D extent{};
   VkSemaphore acquire{};
   VkSemaphore present{};
@@ -83,10 +85,10 @@ class App
   std::unique_ptr<Window> window{ nullptr };
   IContext* context{ nullptr };
   vkb::Swapchain swapchain{};
-  std::vector<VkImage> images;
-  std::vector<VkImageView> views;
+  std::vector<TextureHandle> images;
   VkFormat swapchain_format{};
-  VkExtent2D swapchain_extent{};
+  VkExtent2D swapchain_extent{ 1280, 1024 };
+  VkImageUsageFlags swapchain_usage_flags{ 0 };
   struct FrameSync
   {
     VkSemaphore acquire{};

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "sv/object_handle.hpp"
+#include "sv/pipeline.hpp"
+#include "sv/shader/shader.hpp"
 #include "sv/staging_allocator.hpp"
 #include "sv/texture.hpp"
 
@@ -300,6 +302,10 @@ private:
 };
 
 using TexturePool = Pool<TextureHandle, VulkanTextureND>;
+using GraphicsPipelinePool =
+  Pool<GraphicsPipelineHandle, VulkanGraphicsPipeline>;
+using ComputePipelinePool = Pool<ComputePipelineHandle, VulkanComputePipeline>;
 using BufferPool = Pool<BufferHandle, VulkanDeviceBuffer>;
+using ShaderModulePool = Pool<ShaderModuleHandle, VulkanShader>;
 
 }

@@ -55,7 +55,7 @@ target_include_directories(sv PUBLIC "sv/include" PRIVATE "${vulkan_headers_SOUR
 set_target_properties(sv PROPERTIES CXX_STANDARD 23)
 target_compile_options(sv PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /EHsc)
 
-target_compile_definitions(sv PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_LEFT_HANDED)
+target_compile_definitions(sv PUBLIC HAS_STD_EXPECTED GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_LEFT_HANDED)
 target_link_libraries(sv
   PUBLIC
     glfw

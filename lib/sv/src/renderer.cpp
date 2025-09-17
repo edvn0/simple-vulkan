@@ -1,11 +1,15 @@
 #include "sv/renderer.hpp"
 
 #include "sv/app.hpp"
+#include "sv/common.hpp"
+#include "sv/transitions.hpp"
+#include "vulkan/vulkan_core.h"
 
 #include <GLFW/glfw3.h>
 
 namespace sv {
 
+/*
 namespace {
 auto
 full_range_color(VkImage image) -> VkImageMemoryBarrier2
@@ -87,6 +91,7 @@ end_record(VkCommandBuffer cmd, const sv::AcquiredFrame& af) -> void
   to_present(cmd, af.image);
 }
 }
+*/
 
 Renderer::Renderer(IContext& ctx)
   : context(&ctx)
@@ -96,10 +101,25 @@ Renderer::Renderer(IContext& ctx)
 auto
 Renderer::record(const sv::AcquiredFrame& af) -> void
 {
-  auto& cb = context->get_immediate_commands().acquire();
-  begin_record(cb.command_buffer, af);
-  end_record(cb.command_buffer, af);
-  context->get_immediate_commands().submit(cb);
+  const auto basic_render_pass = RenderPass {
+    .color = {
+      RenderPass::AttachmentDescription{
+        .load_op = LoadOp::Clear,
+        .store_op = StoreOp::Store,
+        .clear_colour = {std::array<float, 4>{1.0F, 0.F, 0.F, 1.F}}
+      },
+    },
+  };
+
+  const auto basic_framebuffer =
+    Framebuffer{ .color = { Framebuffer::AttachmentDescription{
+                   .texture = af.image,
+                 } } };
+
+  auto& cb = context->acquire_command_buffer();
+  cb.cmd_begin_rendering(basic_render_pass, basic_framebuffer, {});
+  cb.cmd_end_rendering();
+  context->submit(cb, af.image);
 }
 
 }

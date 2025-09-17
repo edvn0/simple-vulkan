@@ -16,6 +16,8 @@ auto
 context_destroy(IContext*, GraphicsPipelineHandle) -> void;
 auto
 context_destroy(IContext*, ComputePipelineHandle) -> void;
+auto
+context_destroy(IContext*, ShaderModuleHandle) -> void;
 }
 
 template<typename T>

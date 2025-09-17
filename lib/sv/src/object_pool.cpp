@@ -3,6 +3,7 @@
 #include "sv/object_pool.hpp"
 
 #include "sv/context.hpp"
+#include "sv/object_handle.hpp"
 
 namespace sv::destruction {
 auto
@@ -25,6 +26,12 @@ context_destroy(IContext* ctx, GraphicsPipelineHandle handle) -> void
 }
 auto
 context_destroy(IContext* ctx, ComputePipelineHandle handle) -> void
+{
+  if (ctx)
+    ctx->destroy(handle);
+}
+auto
+context_destroy(IContext* ctx, ShaderModuleHandle handle) -> void
 {
   if (ctx)
     ctx->destroy(handle);

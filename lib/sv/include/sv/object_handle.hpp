@@ -54,6 +54,7 @@ static_assert(sizeof(Handle<class K>) == sizeof(std::uint64_t));
 using TextureHandle = Handle<class TextureND>;
 using BufferHandle = Handle<class DeviceBuffer>;
 using GraphicsPipelineHandle = Handle<class GraphicsPipeline>;
+using ShaderModuleHandle = Handle<class Shader>;
 using ComputePipelineHandle = Handle<class ComputePipeline>;
 
 }

@@ -11,6 +11,10 @@
 
 namespace sv {
 
+static constexpr auto max_mip_levels_framebuffer = 8ULL;
+static constexpr auto num_faces_cube = 6ULL;
+static constexpr auto max_layers_framebuffer = num_faces_cube;
+
 struct TextureDescription
 {
   TextureType type{ TextureType::Two };
@@ -50,7 +54,8 @@ struct VulkanTextureND
   mutable VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
   VkImageView image_view = VK_NULL_HANDLE;         // all levels
   VkImageView storage_image_view = VK_NULL_HANDLE; // identity swizzle
-  std::array<std::array<VkImageView, 6>, 8>
+  std::array<std::array<VkImageView, max_layers_framebuffer>,
+             max_mip_levels_framebuffer>
     framebuffer_image_views{}; // 6 faces per mip, to a max of 8 mips
 
   auto create_image_view(IContext&,

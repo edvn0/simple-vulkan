@@ -6,7 +6,6 @@
 #include <format>
 
 namespace sv {
-namespace {
 auto
 format_to_vk_format(const Format format) -> VkFormat
 {
@@ -91,7 +90,9 @@ format_to_vk_format(const Format format) -> VkFormat
   return VK_FORMAT_UNDEFINED;
 }
 
-auto
+namespace {
+
+[[maybe_unused]] auto
 vk_format_to_format(const VkFormat format) -> Format
 {
   switch (format) {
@@ -454,7 +455,8 @@ VulkanTextureND::get_or_create_image_view_for_framebuffer(IContext& ctx,
       ctx,
       format,
       VK_IMAGE_ASPECT_COLOR_BIT,
-      std::format("ImageView::Framebuffer_{}{}_::{}", level, layer, debug_name),
+      std::format(
+        "ImageView::Framebuffer_{}_{}_::{}", level, layer, debug_name),
       1);
   }
 
