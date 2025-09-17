@@ -90,7 +90,6 @@ class App
   struct FrameSync
   {
     VkSemaphore acquire{};
-    VkCommandBuffer cmd{};
     std::uint64_t render_done_value{};
   };
 
@@ -103,7 +102,6 @@ class App
   std::vector<VkSemaphore> image_present_sems;
   std::vector<FrameSync> frames;
   TimelineSync timeline{};
-  VkCommandPool command_pool{};
   std::uint32_t frame_cursor{};
 
   auto create_command_pool(std::uint32_t family) -> bool;

@@ -8,26 +8,6 @@ namespace sv {
 namespace {
 
 static constexpr auto use_staging = true;
-auto
-storage_type_to_vk_memory_property_flags(StorageType storage)
-{
-  VkMemoryPropertyFlags memory_flags{ 0 };
-
-  switch (storage) {
-    case StorageType::Device:
-      memory_flags |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-      break;
-    case StorageType::HostVisible:
-      memory_flags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-      break;
-    case StorageType::Transient:
-      memory_flags |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                      VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
-      break;
-  }
-  return memory_flags;
-}
 
 auto
 create_buffer(IContext& ctx,
@@ -136,13 +116,12 @@ VulkanDeviceBuffer::create(IContext& ctx, const BufferDescription& w)
     memory_flags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
   }
 
-  
-  BufferHandle handle = create_buffer(
+  const auto handle = create_buffer(
     ctx, description.size, usage_flags, memory_flags, description.debug_name);
 
   if (!description.data.empty()) {
     auto* buffer = ctx.get_buffer_pool().get(handle);
-    buffer->upload(description.data, 0);
+    buffer->upload(description.data);
     ctx.flush_mapped_memory(handle,
                             {
                               .offset = 0,
@@ -156,10 +135,13 @@ auto
 VulkanDeviceBuffer::upload(const std::span<const std::byte> data,
                            std::uint64_t offset) -> void
 {
+  assert(allocation_info.pMappedData != nullptr && "Something strange has happened here!");
+
+  const auto size = data.size_bytes();
   std::memcpy(
-    allocation_info.pMappedData, data.data() + offset, data.size_bytes());
+    allocation_info.pMappedData, data.data() + offset, size);
   vmaFlushAllocation(
-    DeviceAllocator::the(), allocation, offset, data.size_bytes());
+    DeviceAllocator::the(), allocation, offset, size);
 }
 
 }

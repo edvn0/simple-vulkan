@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vulkan/vulkan.h>
 
 #define BIT_FIELD(X)                                                           \
   constexpr auto operator|(X lhs, X rhs)->X                                    \
@@ -515,7 +516,7 @@ struct SpecialisationConstantDescription
   struct SpecialisationConstantEntry
   {
     std::uint32_t constant_id = 0;
-    std::uint32_t offset = 0; // offset within SpecializationConstantDesc::data
+    std::uint32_t offset = 0;
     std::size_t size = 0;
   };
 
@@ -773,5 +774,27 @@ enum class StorageType : std::uint8_t
   HostVisible = bit(2),
 };
 BIT_FIELD(StorageType)
+
+inline auto
+storage_type_to_vk_memory_property_flags(StorageType storage)
+  -> VkMemoryPropertyFlags
+{
+  VkMemoryPropertyFlags memory_flags{ 0 };
+
+  switch (storage) {
+    case StorageType::Device:
+      memory_flags |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+      break;
+    case StorageType::HostVisible:
+      memory_flags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+      break;
+    case StorageType::Transient:
+      memory_flags |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                      VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+      break;
+  }
+  return memory_flags;
+}
 
 }

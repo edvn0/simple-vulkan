@@ -269,30 +269,6 @@ App::create(const ApplicationConfiguration& config)
                                                   std::move(tmp) };
 }
 
-auto
-App::create_command_pool(std::uint32_t family) -> bool
-{
-  VkCommandPoolCreateInfo ci{
-    .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-    .pNext = nullptr,
-    .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-    .queueFamilyIndex = family,
-  };
-  if (vkCreateCommandPool(context->get_device(), &ci, nullptr, &command_pool) !=
-      VK_SUCCESS)
-    return false;
-
-  context->enqueue_destruction([ptr = command_pool](IContext& ctx) {
-    vkDestroyCommandPool(ctx.get_device(), ptr, nullptr);
-  });
-  return true;
-}
-
-auto
-App::destroy_command_pool() -> void
-{
-  command_pool = VK_NULL_HANDLE;
-}
 
 auto
 App::create_swapchain() -> bool
@@ -367,8 +343,18 @@ App::create_frame_sync(uint32_t in_flight) -> bool
   };
   if (vkCreateSemaphore(
         context->get_device(), &tci, nullptr, &timeline.render_timeline) !=
-      VK_SUCCESS)
+      VK_SUCCESS) {
     return false;
+  }
+  VkDebugUtilsObjectNameInfoEXT name_info{};
+  name_info.objectHandle =
+    reinterpret_cast<std::uint64_t>(timeline.render_timeline);
+  name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+  name_info.objectType = VK_OBJECT_TYPE_SEMAPHORE;
+  name_info.pObjectName = "Render timeline";
+  if (auto ctx = dynamic_cast<VulkanContext*>(context)) {
+  ctx->dispatch(&vkb::DispatchTable::fp_vkSetDebugUtilsObjectNameEXT, context->get_device(), &name_info);
+  }
   context->enqueue_destruction([ptr = timeline.render_timeline](IContext& ctx) {
     vkDestroySemaphore(ctx.get_device(), ptr, nullptr);
   });
@@ -383,18 +369,6 @@ App::create_frame_sync(uint32_t in_flight) -> bool
         VK_SUCCESS)
       return false;
 
-    VkCommandBufferAllocateInfo ai{};
-    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    ai.commandPool = command_pool;
-    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    ai.commandBufferCount = 1;
-    if (vkAllocateCommandBuffers(context->get_device(), &ai, &f.cmd) !=
-        VK_SUCCESS)
-      return false;
-
-    context->enqueue_destruction([ptr = f.acquire](IContext& ctx) {
-      vkDestroySemaphore(ctx.get_device(), ptr, nullptr);
-    });
     f.render_done_value = 0;
   }
   frame_cursor = 0;
@@ -415,8 +389,6 @@ App::attach_context(IContext& ctx) -> bool
 
   context->initialise_resources();
 
-  if (!create_command_pool(context->get_graphics_queue_family()))
-    return false;
   if (!create_swapchain())
     return false;
   if (!create_frame_sync(2))
@@ -433,7 +405,6 @@ App::detach_context() -> void
   vkDeviceWaitIdle(context->get_device());
   destroy_frame_sync();
   destroy_swapchain();
-  destroy_command_pool();
   context = nullptr;
 }
 
@@ -468,20 +439,8 @@ App::acquire_frame() -> std::optional<AcquiredFrame>
   af.view = views[index];
   af.extent = swapchain_extent;
   af.acquire = f.acquire;
-  af.present = image_present_sems[index]; // ← per-image present semaphore
+  af.present = image_present_sems[index];
   return af;
-}
-
-auto
-App::command_buffer_for_frame() -> std::optional<VkCommandBuffer>
-{
-  auto& cmd = frames[frame_cursor].cmd;
-  VkCommandBufferBeginInfo begin_info{};
-  begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-  if (vkBeginCommandBuffer(cmd, &begin_info) != VK_SUCCESS) {
-    return std::nullopt;
-  }
-  return cmd;
 }
 
 auto
@@ -489,16 +448,6 @@ App::submit_frame(const AcquiredFrame& af) -> bool
 {
   auto& f = frames[frame_cursor];
 
-  if (vkEndCommandBuffer(f.cmd) != VK_SUCCESS) {
-    return false;
-  }
-
-  VkCommandBufferSubmitInfo cb{
-    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-    .pNext = nullptr,
-    .commandBuffer = f.cmd,
-    .deviceMask = 0,
-  };
   VkSemaphoreSubmitInfo w_acq{
     .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
     .pNext = nullptr,
@@ -507,9 +456,7 @@ App::submit_frame(const AcquiredFrame& af) -> bool
     .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
     .deviceIndex = 0,
   };
-
   const std::uint64_t signal_value = timeline.next_value++;
-
   VkSemaphoreSubmitInfo s_timeline{
     .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
     .pNext = nullptr,
@@ -517,7 +464,6 @@ App::submit_frame(const AcquiredFrame& af) -> bool
     .value = signal_value,
     .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
     .deviceIndex = 0,
-
   };
 
   VkSemaphoreSubmitInfo s_present{
@@ -533,8 +479,6 @@ App::submit_frame(const AcquiredFrame& af) -> bool
   si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
   si.waitSemaphoreInfoCount = 1;
   si.pWaitSemaphoreInfos = &w_acq;
-  si.commandBufferInfoCount = 1;
-  si.pCommandBufferInfos = &cb;
   VkSemaphoreSubmitInfo signals[2] = { s_timeline, s_present };
   si.signalSemaphoreInfoCount = 2;
   si.pSignalSemaphoreInfos = signals;

@@ -298,8 +298,8 @@ VulkanContext::VulkanContext(vkb::Instance&& i,
 auto
 VulkanContext::create_placeholder_resources() -> void
 {
-  std::array<std::uint32_t, 4> white_texture{ 255, 255, 255, 255 };
-  std::span white_texture_span(white_texture);
+  const uint32_t pixel = 0xFFFFFFFF;
+  std::span white_texture_span(&pixel, 1);
   dummy_texture = VulkanTextureND::create(
     *this,
     {

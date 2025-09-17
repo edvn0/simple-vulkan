@@ -46,11 +46,10 @@ main(int argc, char** argv)
     app.poll_events();
 
     auto af = app.acquire_frame();
-    auto cmd = app.command_buffer_for_frame();
-    if (!af || !cmd)
+    if (!af)
       continue;
 
-    renderer.record(*af, *cmd);
+    renderer.record(*af);
 
     app.submit_frame(*af);
   }

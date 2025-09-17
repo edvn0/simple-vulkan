@@ -19,7 +19,7 @@ private:
 
 public:
   Renderer(IContext&);
-  auto record(const AcquiredFrame&, VkCommandBuffer) -> void;
+  auto record(const AcquiredFrame&) -> void;
 };
 
 }

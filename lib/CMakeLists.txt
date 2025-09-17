@@ -61,7 +61,7 @@ target_link_libraries(sv
     glfw
     Vulkan::Vulkan
     Vulkan::glslang
-    vk-bootstrap
+    vk-bootstrap::vk-bootstrap
     glm::glm
     GPUOpen::VulkanMemoryAllocator
 )

@@ -175,27 +175,6 @@ vk_format_to_format(const VkFormat format) -> Format
 }
 
 auto
-storage_type_to_vk_memory_property_flags(StorageType storage)
-{
-  VkMemoryPropertyFlags memory_flags{ 0 };
-
-  switch (storage) {
-    case StorageType::Device:
-      memory_flags |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-      break;
-    case StorageType::HostVisible:
-      memory_flags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-      break;
-    case StorageType::Transient:
-      memory_flags |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                      VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
-      break;
-  }
-  return memory_flags;
-}
-
-auto
 format_is_depth(const VkFormat format) -> bool
 {
   switch (format) {
@@ -259,7 +238,7 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
     usage_flags |= is_depth_or_stencil_format(desc.format)
                      ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                      : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    if (desc.storage == StorageType::Transient) {
+    if ((desc.storage & StorageType::Transient) != StorageType{0}) {
       usage_flags |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
     }
   }

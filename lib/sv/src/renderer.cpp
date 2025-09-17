@@ -94,10 +94,12 @@ Renderer::Renderer(IContext& ctx)
 }
 
 auto
-Renderer::record(const sv::AcquiredFrame& af, VkCommandBuffer cmd) -> void
+Renderer::record(const sv::AcquiredFrame& af) -> void
 {
-  begin_record(cmd, af);
-  end_record(cmd, af);
+  auto& cb = context->get_immediate_commands().acquire();
+  begin_record(cb.command_buffer, af);
+  end_record(cb.command_buffer, af);
+  context->get_immediate_commands().submit(cb);
 }
 
 }

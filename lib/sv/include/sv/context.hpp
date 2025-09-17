@@ -218,6 +218,16 @@ public:
     return *staging_allocator;
   }
 
+
+template<auto member, class... Args>
+  auto dispatch(Args&&... args) const
+    -> decltype(std::declval<
+                std::remove_pointer_t<decltype(dispatch_table.*member)>>()(
+      std::forward<Args>(args)...))
+  {
+    auto fn = dispatch_table.*member;
+    return fn(std::forward<Args>(args)...);
+  }
   static auto create(const Window&)
     -> std::expected<std::unique_ptr<IContext>, ContextError>;
 };
