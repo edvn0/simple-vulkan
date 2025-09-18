@@ -1,5 +1,6 @@
 #pragma once
 
+#include "object_handle.hpp"
 #include "sv/common.hpp"
 #include "sv/object_holder.hpp"
 #include "vulkan/vulkan_core.h"
@@ -82,6 +83,9 @@ struct VulkanTextureND
 
   static auto create(IContext&, const TextureDescription&)
     -> Holder<TextureHandle>;
+
+  static auto create(IContext&, const VkSamplerCreateInfo&)
+    -> Holder<SamplerHandle>;
 };
 
 }

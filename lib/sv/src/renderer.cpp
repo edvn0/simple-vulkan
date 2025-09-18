@@ -2,6 +2,8 @@
 
 #include "sv/app.hpp"
 #include "sv/common.hpp"
+#include "sv/object_handle.hpp"
+#include "sv/shader/shader.hpp"
 #include "sv/transitions.hpp"
 #include "vulkan/vulkan_core.h"
 
@@ -96,23 +98,27 @@ end_record(VkCommandBuffer cmd, const sv::AcquiredFrame& af) -> void
 Renderer::Renderer(IContext& ctx)
   : context(&ctx)
 {
+  basic_shader = VulkanShader::create(ctx, "shaders/simple.glsl");
+  basic = VulkanGraphicsPipeline::create(
+    ctx,
+    {
+      .shader = *basic_shader,
+      .color = { ColourAttachment{
+        .format = Format::BGRA_UN8,
+      } ,},
+      .debug_name = "Basic"
+    });
 }
 
 auto
 Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
 {
-  double t = glfwGetTime();
-
-  float r = 0.5f + 0.5f * static_cast<float>(std::sin(t + 0.0));
-  float g = 0.5f + 0.5f * static_cast<float>(std::sin(t + 2.0));
-  float b = 0.5f + 0.5f * static_cast<float>(std::sin(t + 4.0));
-
   const auto basic_render_pass = RenderPass {
     .color = {
       RenderPass::AttachmentDescription{
         .load_op = LoadOp::Clear,
         .store_op = StoreOp::Store,
-        .clear_colour = {std::array<float, 4>{r,g,b, 1.F}}
+        .clear_colour = {std::array<float, 4>{0,0,0, 1.F}}
       },
     },
   };
@@ -124,6 +130,18 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
                  .debug_name = "Swapchain" };
 
   buf.cmd_begin_rendering(basic_render_pass, basic_framebuffer, {});
+  buf.cmd_bind_graphics_pipeline(*basic);
+  buf.cmd_bind_depth_state({});
+  auto size = context->get_texture_pool().get(present)->extent;
+  const struct Time
+  {
+    float t{ static_cast<float>(glfwGetTime()) };
+    float aspect{ static_cast<float>(size.width) /
+                  static_cast<float>(size.height) };
+    std::uint32_t tex_index{ 0 };
+  } pc{};
+  buf.cmd_push_constants(pc, 0);
+  buf.cmd_draw(3, 1, 0, 0);
   buf.cmd_end_rendering();
 }
 

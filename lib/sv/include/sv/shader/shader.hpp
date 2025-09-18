@@ -82,13 +82,13 @@ class VulkanShader
 
 public:
   VulkanShader() = default;
-  VulkanShader(IContext*,
+  VulkanShader(IContext&,
                std::vector<StageModule>&&,
                PushConstantInfo,
                VkShaderStageFlagBits);
 
-  static auto create(IContext* context, const std::filesystem::path& path)
-    -> Expected<Holder<ShaderModuleHandle>, ShaderError>;
+  static auto create(IContext& context, const std::filesystem::path& path)
+    -> Holder<ShaderModuleHandle>;
 
   [[nodiscard]] auto get_modules() const -> const auto& { return modules; }
 
@@ -129,7 +129,7 @@ private:
   std::vector<StageModule> modules{};
   VkShaderStageFlagBits flags{ VK_SHADER_STAGE_FLAG_BITS_MAX_ENUM };
 
-  static auto compile(IContext* device, const std::filesystem::path& path)
+  static auto compile(IContext& device, const std::filesystem::path& path)
     -> Expected<VulkanShader, ShaderError>;
 
   void move_from(VulkanShader&& other)

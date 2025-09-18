@@ -2,6 +2,7 @@
 
 #include "common.hpp"
 #include "sv/bindless_access.hpp"
+#include "sv/texture.hpp"
 #include "vulkan/vulkan_core.h"
 
 #include <cstdint>
@@ -16,6 +17,7 @@ class Bindless final
 {
   static constexpr std::uint32_t BINDING_SAMPLED = 0u;
   static constexpr std::uint32_t BINDING_STORAGE = 1u;
+  static constexpr std::uint32_t BINDING_SAMPLER = 2u;
 
   static constexpr auto next_pow2(std::uint32_t v) -> std::uint32_t
   {
@@ -35,23 +37,33 @@ public:
                             std::uint32_t sampled_cap,
                             std::uint32_t storage_cap) -> void
   {
-    auto& desc = BindlessAccess<Ctx>::descriptors(ctx);
-    if (desc.layout)
+    using access = BindlessAccess<Ctx>;
+    auto& d = access::descriptors(ctx);
+    const bool need_new = !d.layout || sampled_cap > d.sampled_capacity ||
+                          storage_cap > d.storage_capacity;
+    if (!need_new)
       return;
 
-    VkDescriptorSetLayoutBinding b[2]{};
-    b[0] = { BINDING_SAMPLED,
+    if (d.layout) {
+      d.layout = VK_NULL_HANDLE;
+    }
+
+    VkDescriptorSetLayoutBinding b[3]{};
+    b[0] = { 0u,
              VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
              sampled_cap,
              VK_SHADER_STAGE_ALL,
              nullptr };
-    b[1] = { BINDING_STORAGE,
+    b[1] = { 1u,
              VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
              storage_cap,
              VK_SHADER_STAGE_ALL,
              nullptr };
+    b[2] = {
+      2u, VK_DESCRIPTOR_TYPE_SAMPLER, storage_cap, VK_SHADER_STAGE_ALL, nullptr
+    };
 
-    VkDescriptorBindingFlags bf[2]{
+    VkDescriptorBindingFlags bf[3]{
       VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
         VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
       VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
@@ -61,28 +73,25 @@ public:
     VkDescriptorSetLayoutBindingFlagsCreateInfo flags_ci{
       VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
       nullptr,
-      2u,
+      std::size(bf),
       bf
     };
 
-    VkDescriptorSetLayoutCreateInfo dsl_ci{
+    VkDescriptorSetLayoutCreateInfo ci{
       VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
       &flags_ci,
       VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
-      2u,
+      std::size(b),
       b
     };
 
     vkCreateDescriptorSetLayout(
-      BindlessAccess<Ctx>::device(ctx), &dsl_ci, nullptr, &desc.layout);
-    set_name(ctx,
-             desc.layout,
-             VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
-             "Bindless DescriptorLayout");
-    BindlessAccess<Ctx>::enqueue_destruction(
-      ctx, [ptr = desc.layout](auto& context) {
-        vkDestroyDescriptorSetLayout(context.get_device(), ptr, nullptr);
-      });
+      BindlessAccess<Ctx>::device(ctx), &ci, nullptr, &d.layout);
+    access::enqueue_destruction(ctx, [ptr = d.layout](auto& c) {
+      vkDestroyDescriptorSetLayout(c.get_device(), ptr, nullptr);
+    });
+    d.sampled_capacity = sampled_cap;
+    d.storage_capacity = storage_cap;
   }
 
   static auto allocate_set(Ctx& ctx,
@@ -93,17 +102,14 @@ public:
     auto& desc = BindlessAccess<Ctx>::descriptors(ctx);
 
     if (desc.pool) {
-      BindlessAccess<Ctx>::enqueue_destruction(
-        ctx, [ptr = desc.pool](auto& context) {
-          vkDestroyDescriptorPool(context.get_device(), ptr, nullptr);
-        });
       desc.pool = VK_NULL_HANDLE;
       desc.set = VK_NULL_HANDLE;
     }
 
-    VkDescriptorPoolSize sizes[2]{
+    VkDescriptorPoolSize sizes[3]{
       { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, sampled_cap },
-      { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, storage_cap }
+      { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, storage_cap },
+      { VK_DESCRIPTOR_TYPE_SAMPLER, storage_cap }
     };
 
     VkDescriptorPoolCreateInfo dp_ci{
@@ -111,7 +117,7 @@ public:
       nullptr,
       VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
       1u,
-      2u,
+      3u,
       sizes
     };
 
@@ -142,6 +148,7 @@ public:
   static auto write_all(Ctx& ctx) -> void
   {
     auto& pool = BindlessAccess<Ctx>::textures(ctx);
+    auto& samplers_pool = BindlessAccess<Ctx>::samplers(ctx);
     auto& desc = BindlessAccess<Ctx>::descriptors(ctx);
 
     const auto n = static_cast<std::uint32_t>(pool.size());
@@ -151,23 +158,36 @@ public:
 
     std::vector<VkDescriptorImageInfo> sampled_infos(n);
     std::vector<VkDescriptorImageInfo> storage_infos(n);
+    std::vector<VkDescriptorImageInfo> sampler_infos(n);
 
     auto* default_image_view = pool.get(0);
+    auto* default_sampler = samplers_pool.get(0);
 
-    pool.for_each_dense([&](std::uint32_t i, const auto& v) {
+    pool.for_each_dense([&](std::uint32_t i, const VulkanTextureND& v) {
       const auto sampled = v.image_view != VK_NULL_HANDLE
                              ? v.image_view
                              : default_image_view->image_view;
       const auto storage = v.storage_image_view != VK_NULL_HANDLE
                              ? v.storage_image_view
                              : default_image_view->image_view;
+
+      const auto is_storage = v.usage_flags & VK_IMAGE_USAGE_STORAGE_BIT;
+      const auto is_sampled = v.usage_flags & VK_IMAGE_USAGE_SAMPLED_BIT;
+
       sampled_infos[i] = { VK_NULL_HANDLE,
-                           sampled,
-                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-      storage_infos[i] = { VK_NULL_HANDLE, storage, VK_IMAGE_LAYOUT_GENERAL };
+                           is_sampled ? sampled
+                                      : default_image_view->image_view,
+                           VK_IMAGE_LAYOUT_GENERAL };
+      storage_infos[i] = { VK_NULL_HANDLE,
+                           is_storage ? storage
+                                      : default_image_view->image_view,
+                           VK_IMAGE_LAYOUT_GENERAL };
+      sampler_infos[i] = { *default_sampler,
+                           VK_NULL_HANDLE,
+                           VK_IMAGE_LAYOUT_UNDEFINED };
     });
 
-    VkWriteDescriptorSet w[2]{};
+    VkWriteDescriptorSet w[3]{};
     w[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
              nullptr,
              desc.set,
@@ -188,29 +208,39 @@ public:
              storage_infos.data(),
              nullptr,
              nullptr };
+    w[2] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+             nullptr,
+             desc.set,
+             BINDING_SAMPLER,
+             0u,
+             n,
+             VK_DESCRIPTOR_TYPE_SAMPLER,
+             sampler_infos.data(),
+             nullptr,
+             nullptr };
 
     vkUpdateDescriptorSets(
-      BindlessAccess<Ctx>::device(ctx), 2u, w, 0u, nullptr);
+      BindlessAccess<Ctx>::device(ctx), 3u, w, 0u, nullptr);
   }
 
   static auto sync_on_frame_acquire(Ctx& ctx) -> void
   {
     using access = BindlessAccess<Ctx>;
     access::process_pre_frame_work(ctx);
-
     if (!access::needs_descriptor_update(ctx))
       return;
 
-    auto& desc = access::descriptors(ctx);
-    const auto n = static_cast<std::uint32_t>(access::textures(ctx).size());
-    const auto cap_samp = std::max(next_pow2(n), 1u);
-    const auto cap_store = std::max(next_pow2(n), 1u);
+    auto& d = access::descriptors(ctx);
+    const auto n =
+      std::max(std::max(d.sampled_capacity, d.storage_capacity),
+               static_cast<std::uint32_t>(access::textures(ctx).size()));
+    const auto cap = std::max(next_pow2(n), 1u);
 
-    if (!desc.layout)
-      ensure_layout(ctx, cap_samp, cap_store);
-    if (desc.set == VK_NULL_HANDLE || cap_samp > desc.sampled_capacity ||
-        cap_store > desc.storage_capacity) {
-      allocate_set(ctx, cap_samp, cap_store);
+    ensure_layout(ctx, cap, cap);
+
+    if (d.set == VK_NULL_HANDLE || cap > d.sampled_capacity ||
+        cap > d.storage_capacity) {
+      allocate_set(ctx, cap, cap);
     }
 
     write_all(ctx);

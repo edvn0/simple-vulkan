@@ -1,5 +1,8 @@
 #include "sv/context.hpp"
 
+#include "sv/tracing.hpp"
+
+#include "sv/bindless.hpp"
 #include "sv/bindless_access.hpp"
 #include "sv/object_handle.hpp"
 #include "sv/texture.hpp"
@@ -25,6 +28,7 @@ create_fence(IContext& ctx, const std::string_view name) -> VkFence
 {
   const VkFenceCreateInfo ci = {
     .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+    .pNext = nullptr,
     .flags = 0,
   };
   VkFence fence = VK_NULL_HANDLE;
@@ -296,9 +300,117 @@ vk_debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
 }
 }
 
+struct VulkanContext::TracingImpl
+{
+#if defined(HAS_TRACY_TRACING)
+  TracyVkCtx vulkan_context = nullptr;
+  VkCommandPool tracy_command_pool = VK_NULL_HANDLE;
+  VkCommandBuffer tracy_command_buffer = VK_NULL_HANDLE;
+#endif // HAS_TRACY_TRACING
+};
+
+auto
+VulkanContext::initialise_tracing() -> void
+{
+#if defined(HAS_TRACY_TRACING)
+
+  static PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR
+    get_calibrateable_time_domains = nullptr;
+  static PFN_vkGetCalibratedTimestampsEXT get_calibrated_timestamps = nullptr;
+
+  if (!get_calibrateable_time_domains && !get_calibrated_timestamps) {
+    get_calibrateable_time_domains =
+      reinterpret_cast<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR>(
+        vkGetInstanceProcAddr(
+          instance, "vkGetPhysicalDeviceCalibrateableTimeDomainsKHR"));
+    get_calibrated_timestamps =
+      reinterpret_cast<PFN_vkGetCalibratedTimestampsEXT>(
+        vkGetInstanceProcAddr(instance, "vkGetCalibratedTimestampsEXT"));
+  }
+
+  std::vector<VkTimeDomainEXT> time_domains;
+  static constexpr auto has_calibrated_timestamps = true; // Read from somewhere
+  if constexpr (has_calibrated_timestamps) {
+    uint32_t time_domain_count = 0;
+    get_calibrateable_time_domains(
+      device.physical_device, &time_domain_count, nullptr);
+    time_domains.resize(time_domain_count);
+    get_calibrateable_time_domains(
+      device.physical_device, &time_domain_count, time_domains.data());
+  }
+
+  static constexpr auto supports_host_query =
+    true; //  vkFeatures12_.hostQueryReset
+  const bool hasHostQuery = supports_host_query && [&time_domains]() -> bool {
+    for (VkTimeDomainEXT domain : time_domains)
+      if (domain == VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_EXT ||
+          domain == VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_EXT)
+        return true;
+    return false;
+  }();
+  if (hasHostQuery) {
+    tracing->vulkan_context =
+      TracyVkContextHostCalibrated(device.physical_device,
+                                   device,
+                                   vkResetQueryPool,
+                                   get_calibrateable_time_domains,
+                                   get_calibrated_timestamps);
+  } /*else {
+    const VkCommandPoolCreateInfo ciCommandPool = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+      .pNext = nullptr,
+      .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT |
+               VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
+      .queueFamilyIndex = graphics_family,
+    };
+    vkCreateCommandPool(
+      device, &ciCommandPool, nullptr, &tracing->tracyCommandPool_);
+    lvk::setDebugObjectName(
+      device,
+      VK_OBJECT_TYPE_COMMAND_POOL,
+      (uint64_t)tracing->tracyCommandPool_,
+      "Command Pool: VulkanContextImpl::tracyCommandPool_");
+    const VkCommandBufferAllocateInfo aiCommandBuffer = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = tracing->tracyCommandPool_,
+      .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+      .commandBufferCount = 1,
+    };
+    vkAllocateCommandBuffers(
+      device, &aiCommandBuffer, &tracing->tracyCommandBuffer_);
+    if (hasCalibratedTimestamps_) {
+      tracing->vulkan_context =
+        TracyVkContextCalibrated(device.physical_device,
+                                 device,
+                                 deviceQueues_.graphicsQueue,
+                                 tracing->tracyCommandBuffer_,
+                                 vkGetPhysicalDeviceCalibrateableTimeDomainsEXT,
+                                 vkGetCalibratedTimestampsEXT);
+    } else {
+      tracing->vulkan_context = TracyVkContext(device.physical_device,
+                                               device,
+                                               deviceQueues_.graphicsQueue,
+                                               tracing->tracyCommandBuffer_);
+    };
+  }*/
+  assert(tracing->vulkan_context);
+#endif // HAS_TRACY_TRACING
+}
+
 VulkanContext::~VulkanContext()
 {
+  // LVK_PROFILER_FUNCTION();
+  vkDeviceWaitIdle(device);
+
+#if defined(HAS_TRACY_TRACING)
+  TracyVkDestroy(tracing->vulkan_context);
+  if (tracing->tracy_command_pool) {
+    vkDestroyCommandPool(device, tracing->tracy_command_pool, nullptr);
+  }
+#endif // HAS_TRACY_TRACING
+
   destroy(*dummy_texture);
+  destroy(*dummy_sampler);
 
   swapchain.reset();
   staging_allocator.reset();
@@ -436,6 +548,7 @@ VulkanContext::create(const Window& window, const ContextConfiguration& conf)
     phys_device_selector.set_minimum_version(1, 3)
       .set_surface(surface)
       .add_required_extension_features(maintenance_one_features)
+      .add_required_extension(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME)
       .set_required_features(required_features)
       .set_required_features_11(required_11_features)
       .set_required_features_12(required_12_features)
@@ -577,7 +690,10 @@ VulkanContext::VulkanContext(vkb::Instance&& i,
   staging_allocator = std::make_unique<StagingAllocator>(*this);
   immediate_commands =
     std::make_unique<ImmediateCommands>(*this, "ImmediateCommands");
+  tracing = std::unique_ptr<TracingImpl, PimplDeleter>(new TracingImpl, {});
+  initialise_tracing();
   create_placeholder_resources();
+  Bindless<VulkanContext>::sync_on_frame_acquire(*this);
 }
 
 auto
@@ -593,6 +709,29 @@ VulkanContext::create_placeholder_resources() -> void
       .pixel_data = std::as_bytes(white_texture_span),
       .debug_name = "White Texture (reserved)",
     });
+
+  dummy_sampler =
+    VulkanTextureND::create(*this,
+                            {
+                              .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                              .pNext = nullptr,
+                              .flags = 0,
+                              .magFilter = VK_FILTER_LINEAR,
+                              .minFilter = VK_FILTER_LINEAR,
+                              .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                              .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                              .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                              .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                              .mipLodBias = 0.0F,
+                              .anisotropyEnable = VK_FALSE,
+                              .maxAnisotropy = 0.0F,
+                              .compareEnable = VK_FALSE,
+                              .compareOp = VK_COMPARE_OP_ALWAYS,
+                              .minLod = 0.0F,
+                              .maxLod = 1.0F,
+                              .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
+                              .unnormalizedCoordinates = VK_FALSE,
+                            });
 }
 
 auto
@@ -722,6 +861,21 @@ VulkanContext::destroy(BufferHandle handle) -> void
 }
 
 auto
+VulkanContext::destroy(SamplerHandle handle) -> void
+{
+  SCOPE_EXIT
+  {
+    samplers.erase(handle);
+  };
+  auto* buf = samplers.get(handle);
+  if (!buf)
+    return;
+  defer_task([sampler = *buf](IContext& ctx) {
+    vkDestroySampler(ctx.get_device(), sampler, nullptr);
+  });
+}
+
+auto
 VulkanContext::flush_mapped_memory(BufferHandle handle, OffsetSize os) const
   -> void
 {
@@ -751,9 +905,9 @@ VulkanContext::submit(ICommandBuffer& cmd, TextureHandle present)
 {
   CommandBuffer* vk_cmd = static_cast<CommandBuffer*>(&cmd);
 
-#if defined(LVK_WITH_TRACY_GPU)
-  TracyVkCollect(pimpl_->tracyVkCtx_, vk_cmd->wrapper_->cmdBuf_);
-#endif // LVK_WITH_TRACY_GPU
+#if defined(HAS_TRACY_TRACING)
+  TracyVkCollect(tracing->vulkan_context, vk_cmd->wrapper->command_buffer);
+#endif // HAS_TRACY_TRACING
 
   if (present) {
     const auto& tex = *textures.get(present);
@@ -1197,6 +1351,11 @@ VulkanContext::get_pipeline(GraphicsPipelineHandle handle) -> VkPipeline
 
   rps->pipeline = pipeline;
   rps->layout = layout;
+  set_name(*this,
+           rps->get_pipeline(),
+           VK_OBJECT_TYPE_PIPELINE,
+           "Graphics Pipeline {}",
+           rps->description.debug_name);
 
   return pipeline;
 }

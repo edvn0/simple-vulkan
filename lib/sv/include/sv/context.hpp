@@ -137,6 +137,7 @@ class VulkanContext final : public IContext
   static inline ContextConfiguration config;
 
   TexturePool textures;
+  SamplerPool samplers;
   BufferPool buffers;
   GraphicsPipelinePool graphics_pipelines;
   ComputePipelinePool compute_pipelines;
@@ -153,7 +154,7 @@ class VulkanContext final : public IContext
   friend class ImmediateCommands;
 
   Holder<TextureHandle> dummy_texture;
-  // Holder<TextureHandle> dummy_sampler;
+  Holder<SamplerHandle> dummy_sampler;
 
   CommandBuffer command_buffer;
   friend class CommandBuffer;
@@ -165,6 +166,10 @@ class VulkanContext final : public IContext
     false
   }; // WE make one external call to initialise the swapchain first call.
   friend class VulkanSwapchain;
+
+  struct TracingImpl;
+  std::unique_ptr<TracingImpl, PimplDeleter> tracing;
+  auto initialise_tracing() -> void;
 
   std::deque<std::function<void(IContext&)>> delete_queue;
   std::deque<std::function<void(IContext&)>> pre_frame_queue;
@@ -266,6 +271,10 @@ public:
   auto get_buffer_pool() const -> const BufferPool& { return buffers; }
   auto destroy(BufferHandle) -> void override;
 
+  auto get_sampler_pool() -> SamplerPool& override { return samplers; }
+  auto get_sampler_pool() const -> const SamplerPool& { return samplers; }
+  auto destroy(SamplerHandle) -> void override;
+
   auto flush_mapped_memory(BufferHandle, OffsetSize) const -> void override;
   auto invalidate_mapped_memory(BufferHandle, OffsetSize) const
     -> void override;
@@ -345,6 +354,7 @@ struct BindlessAccess<VulkanContext>
     return c.descriptors;
   }
   static auto textures(VulkanContext& c) -> TexturePool& { return c.textures; }
+  static auto samplers(VulkanContext& c) -> SamplerPool& { return c.samplers; }
   static auto needs_descriptor_update(VulkanContext& c) -> bool&
   {
     return c.needs_descriptor_update;

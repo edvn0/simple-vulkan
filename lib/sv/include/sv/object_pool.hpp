@@ -302,6 +302,7 @@ private:
 };
 
 using TexturePool = Pool<TextureHandle, VulkanTextureND>;
+using SamplerPool = Pool<SamplerHandle, VkSampler>;
 using GraphicsPipelinePool =
   Pool<GraphicsPipelineHandle, VulkanGraphicsPipeline>;
 using ComputePipelinePool = Pool<ComputePipelineHandle, VulkanComputePipeline>;

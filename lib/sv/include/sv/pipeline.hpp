@@ -62,7 +62,7 @@ class VulkanComputePipeline
 public:
   VulkanComputePipeline() { stage_flags = VK_SHADER_STAGE_COMPUTE_BIT; }
 
-  static auto create(IContext* context, const ComputePipelineDescription& desc)
+  static auto create(IContext& context, const ComputePipelineDescription& desc)
     -> Holder<ComputePipelineHandle>;
 };
 
@@ -125,7 +125,7 @@ public:
     return stage_flags;
   }
 
-  static auto create(IContext* context, const GraphicsPipelineDescription& desc)
+  static auto create(IContext& context, const GraphicsPipelineDescription& desc)
     -> Holder<GraphicsPipelineHandle>;
 };
 }

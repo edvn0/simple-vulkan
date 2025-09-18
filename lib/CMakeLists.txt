@@ -46,7 +46,36 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(vma)
 
-find_package(Vulkan REQUIRED COMPONENTS glslang)
+FetchContent_Declare(
+  glslang
+  GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
+  GIT_TAG main
+)
+set(ENABLE_OPT OFF CACHE INTERNAL "")
+set(GLSLANG_TESTS_DEFAULT OFF CACHE INTERNAL "")
+set(GLSLANG_ENABLE_INSTALL_DEFAULT OFF CACHE INTERNAL "")
+set(BUILD_EXTERNAL OFF CACHE INTERNAL "")
+set(ENABLE_GLSLANG_BINARIES OFF CACHE INTERNAL "")
+set(ENABLE_HLSL OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(glslang)
+
+FetchContent_Declare(
+  spirv-reflect
+  GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Reflect.git
+  GIT_TAG main
+)
+set(SPIRV_REFLECT_STATIC_LIB ON CACHE INTERNAL "")
+set(SPIRV_REFLECT_EXECUTABLE OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(spirv-reflect)
+
+FetchContent_Declare(
+  tracy
+  GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+  GIT_TAG master
+)
+FetchContent_MakeAvailable(tracy)
+
+find_package(Vulkan REQUIRED)
 
 file(GLOB_RECURSE sv_sources CONFIGURE_DEPENDS "sv/src/*.cpp" "sv/include/*.hpp")
 add_library(sv STATIC ${sv_sources})
@@ -55,7 +84,7 @@ target_include_directories(sv PUBLIC "sv/include" PRIVATE "${vulkan_headers_SOUR
 set_target_properties(sv PROPERTIES CXX_STANDARD 23)
 target_compile_options(sv PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /EHsc)
 
-set(SIMPLE_VULKAN_COMPILE_DEFS "GLM_FORCE_DEPTH_ZERO_TO_ONE;GLM_FORCE_LEFT_HANDED")
+set(SIMPLE_VULKAN_COMPILE_DEFS "GLM_FORCE_DEPTH_ZERO_TO_ONE;GLM_FORCE_LEFT_HANDED;HAS_TRACY_TRACING")
 
 if (HAS_STD_EXPECTED)
     list(APPEND SIMPLE_VULKAN_COMPILE_DEFS "HAS_STD_EXPECTED")
@@ -66,7 +95,9 @@ target_link_libraries(sv
   PUBLIC
     glfw
     Vulkan::Vulkan
-    Vulkan::glslang
+    glslang::glslang
+    spirv-reflect-static
+    TracyClient
     vk-bootstrap::vk-bootstrap
     glm::glm
     GPUOpen::VulkanMemoryAllocator

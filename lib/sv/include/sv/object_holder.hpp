@@ -18,6 +18,8 @@ auto
 context_destroy(IContext*, ComputePipelineHandle) -> void;
 auto
 context_destroy(IContext*, ShaderModuleHandle) -> void;
+auto
+context_destroy(IContext*, SamplerHandle) -> void;
 }
 
 template<typename T>

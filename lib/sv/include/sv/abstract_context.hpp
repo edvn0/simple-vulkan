@@ -55,12 +55,13 @@ struct IContext
   virtual auto get_buffer_pool() -> BufferPool& = 0;
   virtual auto destroy(BufferHandle) -> void = 0;
 
+  virtual auto get_sampler_pool() -> SamplerPool& = 0;
+  virtual auto destroy(SamplerHandle) -> void = 0;
+
   virtual auto recreate_swapchain(std::uint32_t, std::uint32_t) -> bool = 0;
   virtual auto get_current_swapchain_texture() -> TextureHandle = 0;
   virtual auto acquire_command_buffer() -> ICommandBuffer& = 0;
-  virtual auto submit(ICommandBuffer& ,
-                      TextureHandle)
-    -> SubmitHandle = 0;
+  virtual auto submit(ICommandBuffer&, TextureHandle) -> SubmitHandle = 0;
 
   struct OffsetSize
   {

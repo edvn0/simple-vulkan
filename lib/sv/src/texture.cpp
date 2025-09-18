@@ -2,6 +2,7 @@
 
 #include "sv/common.hpp"
 #include "sv/context.hpp"
+#include "sv/object_handle.hpp"
 #include "vulkan/vulkan_core.h"
 #include <format>
 
@@ -217,6 +218,16 @@ is_depth_or_stencil_format(const Format format) -> bool
 {
   return is_depth_or_stencil_format(format_to_vk_format(format));
 }
+}
+
+auto
+VulkanTextureND::create(IContext& ctx, const VkSamplerCreateInfo& info)
+  -> Holder<SamplerHandle>
+{
+  VkSampler smp;
+  vkCreateSampler(ctx.get_device(), &info, nullptr, &smp);
+
+  return Holder{ &ctx, ctx.get_sampler_pool().insert(std::move(smp)) };
 }
 
 auto

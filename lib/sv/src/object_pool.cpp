@@ -36,4 +36,10 @@ context_destroy(IContext* ctx, ShaderModuleHandle handle) -> void
   if (ctx)
     ctx->destroy(handle);
 }
+auto
+context_destroy(IContext* ctx, SamplerHandle handle) -> void
+{
+  if (ctx)
+    ctx->destroy(handle);
+}
 }

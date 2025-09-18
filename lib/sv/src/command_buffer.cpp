@@ -1,5 +1,6 @@
 #include "sv/command_buffer.hpp"
 
+#include "sv/bindless.hpp"
 #include "sv/context.hpp"
 #include "sv/transitions.hpp"
 
@@ -323,7 +324,7 @@ CommandBuffer::cmd_begin_rendering(const RenderPass& render_pass,
                     .extent = { scissor.width, scissor.height, }, };
   vkCmdSetScissor(wrapper->command_buffer, 0, 1, &rect);
 
-  BindlessAccess<VulkanContext>::process_pre_frame_work(*context);
+  Bindless<VulkanContext>::sync_on_frame_acquire(*context);
 
   vkCmdBeginRendering(wrapper->command_buffer, &rendering_info);
 }
