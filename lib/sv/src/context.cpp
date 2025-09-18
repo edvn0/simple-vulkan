@@ -9,6 +9,7 @@
 #include "sv/common.hpp"
 #include "sv/renderer.hpp"
 #include "sv/scope_exit.hpp"
+#include "vulkan/vulkan_core.h"
 
 #include <GLFW/glfw3.h>
 #include <cstdlib>
@@ -388,9 +389,9 @@ VulkanContext::create(const Window& window, const ContextConfiguration& conf)
   required_11_features.shaderDrawParameters = true;
 
   VkPhysicalDeviceVulkan12Features required_12_features{};
-required_12_features.vulkanMemoryModel =true;
-required_12_features.vulkanMemoryModelDeviceScope=true;
-required_12_features.vulkanMemoryModelAvailabilityVisibilityChains = true;
+  required_12_features.vulkanMemoryModel = true;
+  required_12_features.vulkanMemoryModelDeviceScope = true;
+  required_12_features.vulkanMemoryModelAvailabilityVisibilityChains = true;
   required_12_features.bufferDeviceAddress = true;
   required_12_features.descriptorIndexing = true;
   required_12_features.timelineSemaphore = true;
@@ -424,10 +425,17 @@ required_12_features.vulkanMemoryModelAvailabilityVisibilityChains = true;
   required_13_features.dynamicRendering = true;
   required_13_features.synchronization2 = true;
 
+  VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT
+    maintenance_one_features = {};
+  maintenance_one_features.sType =
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
+  maintenance_one_features.swapchainMaintenance1 =
+    VK_TRUE; // Enable the feature
+
   auto phys_device_builder =
     phys_device_selector.set_minimum_version(1, 3)
       .set_surface(surface)
-      .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)
+      .add_required_extension_features(maintenance_one_features)
       .set_required_features(required_features)
       .set_required_features_11(required_11_features)
       .set_required_features_12(required_12_features)
@@ -496,7 +504,9 @@ DeviceAllocator::the() -> VmaAllocator&
 #endif
 }
 auto
-DeviceAllocator::initialise(VkInstance instance, VkPhysicalDevice physical, VkDevice device) -> void
+DeviceAllocator::initialise(VkInstance instance,
+                            VkPhysicalDevice physical,
+                            VkDevice device) -> void
 {
   VmaAllocatorCreateInfo create_info{};
   create_info.instance = instance;
@@ -562,6 +572,7 @@ VulkanContext::VulkanContext(vkb::Instance&& i,
 {
   has_swapchain_maintenance_1 = device.physical_device.is_extension_present(
     VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+  swapchain = std::make_unique<VulkanSwapchain>(*this);
   query_vulkan_properties(device.physical_device, vulkan_properties);
   staging_allocator = std::make_unique<StagingAllocator>(*this);
   immediate_commands =
@@ -735,12 +746,13 @@ VulkanContext::get_current_swapchain_texture() -> TextureHandle
 }
 
 auto
-VulkanContext::submit(ICommandBuffer& commandBuffer, TextureHandle present) -> SubmitHandle
+VulkanContext::submit(ICommandBuffer& cmd, TextureHandle present)
+  -> SubmitHandle
 {
-  CommandBuffer* vkCmdBuffer = static_cast<CommandBuffer*>(&commandBuffer);
+  CommandBuffer* vk_cmd = static_cast<CommandBuffer*>(&cmd);
 
 #if defined(LVK_WITH_TRACY_GPU)
-  TracyVkCollect(pimpl_->tracyVkCtx_, vkCmdBuffer->wrapper_->cmdBuf_);
+  TracyVkCollect(pimpl_->tracyVkCtx_, vk_cmd->wrapper_->cmdBuf_);
 #endif // LVK_WITH_TRACY_GPU
 
   if (present) {
@@ -748,8 +760,8 @@ VulkanContext::submit(ICommandBuffer& commandBuffer, TextureHandle present) -> S
 
     assert(tex.is_swapchain_image);
 
-    Transition::release_swapchain_for_present(
-      vkCmdBuffer->wrapper->command_buffer, tex.image);
+    Transition::release_swapchain_for_present(vk_cmd->wrapper->command_buffer,
+                                              tex.image);
   }
 
   constexpr auto has_swapchain = [] { return true; };
@@ -766,7 +778,7 @@ VulkanContext::submit(ICommandBuffer& commandBuffer, TextureHandle present) -> S
     immediate_commands->signal_semaphore(timeline_semaphore, signal_value);
   }
 
-  vkCmdBuffer->last_submit_handle = immediate_commands->submit(*vkCmdBuffer->wrapper);
+  vk_cmd->last_submit_handle = immediate_commands->submit(*vk_cmd->wrapper);
 
   if (should_present) {
     swapchain->present(immediate_commands->acquire_last_submit_semaphore());
@@ -774,7 +786,7 @@ VulkanContext::submit(ICommandBuffer& commandBuffer, TextureHandle present) -> S
 
   BindlessAccess<VulkanContext>::process_pre_frame_work(*this);
 
-  SubmitHandle handle = vkCmdBuffer->last_submit_handle;
+  SubmitHandle handle = vk_cmd->last_submit_handle;
 
   // reset
   command_buffer = {};
@@ -1194,10 +1206,14 @@ VulkanSwapchain::VulkanSwapchain(IContext& ctx)
 {
 }
 
-VulkanSwapchain::~VulkanSwapchain() {
+auto
+VulkanSwapchain::destroy() -> void
+{
+  timeline_wait_values.fill(0);
+
   for (TextureHandle handle : swapchain_textures) {
     if (handle.valid()) {
-    context->destroy(handle);
+      context->destroy(handle);
     }
   }
   vkb::destroy_swapchain(swapchain);
@@ -1212,6 +1228,13 @@ VulkanSwapchain::~VulkanSwapchain() {
       vkDestroyFence(context->get_device(), fence, nullptr);
     }
   }
+  acquire_semaphores.fill(VK_NULL_HANDLE);
+  present_fence.fill(VK_NULL_HANDLE);
+}
+
+VulkanSwapchain::~VulkanSwapchain()
+{
+  destroy();
 }
 
 auto
@@ -1241,12 +1264,18 @@ VulkanSwapchain::get_current_texture() -> TextureHandle
     if (present_fence.at(current_image_index)) {
       // VK_EXT_swapchain_maintenance1: before acquiring again, wait for the
       // presentation operation to finish
-      vkWaitForFences(
-        context->get_device(), 1, &present_fence.at(current_image_index), VK_TRUE, UINT64_MAX);
-      vkResetFences(context->get_device(), 1, &present_fence.at(current_image_index));
+      vkWaitForFences(context->get_device(),
+                      1,
+                      &present_fence.at(current_image_index),
+                      VK_TRUE,
+                      UINT64_MAX);
+      vkResetFences(
+        context->get_device(), 1, &present_fence.at(current_image_index));
     }
     const VkSemaphoreWaitInfo waitInfo = {
       .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+      .pNext = nullptr,
+      .flags = 0,
       .semaphoreCount = 1,
       .pSemaphores = &context->timeline_semaphore,
       .pValues = &timeline_wait_values.at(current_image_index),
@@ -1280,24 +1309,25 @@ VulkanSwapchain::resize(std::uint32_t width, std::uint32_t height) -> void
   static constexpr auto flags = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                                 VK_IMAGE_USAGE_SAMPLED_BIT |
                                 VK_IMAGE_USAGE_STORAGE_BIT;
-  vkb::SwapchainBuilder builder{ context->get_device_wrapper(),
-                                 context->get_surface(), };
+  vkb::SwapchainBuilder builder{
+    context->get_device_wrapper(),
+    context->get_surface(),
+  };
   builder.set_desired_extent(width, height)
     .set_desired_min_image_count(3)
     .set_desired_present_mode(VK_PRESENT_MODE_MAILBOX_KHR)
     .set_image_usage_flags(flags)
     .set_old_swapchain(swapchain)
-    .set_desired_format({ 
+    .set_desired_format({
       .format = VK_FORMAT_B8G8R8A8_UNORM,
       .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
-     });
+    });
   if (auto result = builder.build(); result.has_value()) {
     swapchain = std::move(result.value());
   }
-  if (!swapchain.swapchain)
-    return;
+  assert(swapchain.swapchain);
 
-  auto imgs = std::move(swapchain.get_images().value());
+  auto imgs = swapchain.get_images().value();
 
   for (auto i = 0U; i < imgs.size(); i++) {
     acquire_semaphores.at(i) =
@@ -1313,8 +1343,10 @@ VulkanSwapchain::resize(std::uint32_t width, std::uint32_t height) -> void
       .format = swapchain.image_format,
       .is_swapchain_image = true,
       .is_owning_image = false,
-      .is_depth_format = false, //VulkanImage::isDepthFormat(surfaceFormat_.format),
-      .is_stencil_format = false, //VulkanImage::isStencilFormat(surfaceFormat_.format),
+      .is_depth_format =
+        false, // VulkanImage::isDepthFormat(surfaceFormat_.format),
+      .is_stencil_format =
+        false, // VulkanImage::isStencilFormat(surfaceFormat_.format),
     };
 
     image.image_view = image.create_image_view(*context,
@@ -1328,11 +1360,12 @@ VulkanSwapchain::resize(std::uint32_t width, std::uint32_t height) -> void
   }
 }
 
-
-auto VulkanSwapchain::present(VkSemaphore wait_semaphore) -> bool
+auto
+VulkanSwapchain::present(VkSemaphore wait_semaphore) -> bool
 {
   const VkSwapchainPresentFenceInfoEXT fence_info = {
     .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT,
+    .pNext = nullptr,
     .swapchainCount = 1,
     .pFences = &present_fence.at(current_image_index),
   };
@@ -1344,6 +1377,7 @@ auto VulkanSwapchain::present(VkSemaphore wait_semaphore) -> bool
     .swapchainCount = 1u,
     .pSwapchains = &swapchain.swapchain,
     .pImageIndices = &current_image_index,
+    .pResults = nullptr,
   };
   if (context->has_swapchain_maintenance_1) {
     if (present_fence.at(current_image_index) == VK_NULL_HANDLE) {
@@ -1364,17 +1398,18 @@ auto VulkanSwapchain::present(VkSemaphore wait_semaphore) -> bool
 }
 
 auto
-VulkanContext::initialise_swapchain(std::uint32_t width, std::uint32_t height) -> bool
+VulkanContext::initialise_swapchain(std::uint32_t width, std::uint32_t height)
+  -> bool
 {
   if (!device || !immediate_commands) {
     return false;
   }
 
-  if (swapchain) {
+  if (swapchain->swapchain.swapchain) {
     // destroy the old swapchain first
     // TODO: replace with VK_EXT_swapchain_maintenance1
     vkDeviceWaitIdle(device);
-    swapchain = nullptr;
+    swapchain->destroy();
     vkDestroySemaphore(device, timeline_semaphore, nullptr);
   }
 
@@ -1382,13 +1417,12 @@ VulkanContext::initialise_swapchain(std::uint32_t width, std::uint32_t height) -
     return false;
   }
 
-  swapchain = std::make_unique<VulkanSwapchain>(*this);
+  vkQueueWaitIdle(graphics_queue);
+  vkQueueWaitIdle(present_queue);
   swapchain->resize(width, height);
 
-  timeline_semaphore =
-    create_timeline_semaphore(*this,
-                                 swapchain->get_image_count() - 1,
-                                 "Semaphore: timeline semaphore");
+  timeline_semaphore = create_timeline_semaphore(
+    *this, swapchain->get_image_count() - 1, "Semaphore: timeline semaphore");
 
   return swapchain != nullptr;
 }

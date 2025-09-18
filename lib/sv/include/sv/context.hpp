@@ -90,7 +90,8 @@ public:
   auto get_current_image() const -> VkImage;
   auto get_current_image_view() const -> VkImageView;
   auto get_current_texture() -> TextureHandle;
-  auto get_current_image_index() const -> std::uint32_t {
+  auto get_current_image_index() const -> std::uint32_t
+  {
     return current_image_index;
   }
   auto get_surface_format() const { return swapchain.image_format; }
@@ -101,14 +102,15 @@ public:
 public:
   VulkanContext* context{ nullptr };
   vkb::Swapchain swapchain;
-  uint32_t current_image_index = 0; // [0...numSwapchainImages_)
-  uint64_t current_frame_index = 0; // [0...+inf)
+  std::uint32_t current_image_index = 0; // [0...numSwapchainImages_)
+  std::uint64_t current_frame_index = 0; // [0...+inf)
   bool get_next_image = true;
-  std::array<TextureHandle , max_image_count> swapchain_textures {};
-  std::array<VkSemaphore , max_image_count> acquire_semaphores {};
-  std::array<VkFence , max_image_count> present_fence {};
+  std::array<TextureHandle, max_image_count> swapchain_textures{};
+  std::array<VkSemaphore, max_image_count> acquire_semaphores{};
+  std::array<VkFence, max_image_count> present_fence{};
   std::array<uint64_t, max_image_count> timeline_wait_values{};
 
+  auto destroy() -> void;
 };
 
 class VulkanContext final : public IContext
@@ -158,7 +160,10 @@ class VulkanContext final : public IContext
 
   std::unique_ptr<VulkanSwapchain> swapchain;
   VkSemaphore timeline_semaphore;
-  bool has_swapchain_maintenance_1{ false };
+  bool has_swapchain_maintenance_1{ true };
+  bool should_resize{
+    false
+  }; // WE make one external call to initialise the swapchain first call.
   friend class VulkanSwapchain;
 
   std::deque<std::function<void(IContext&)>> delete_queue;
@@ -271,12 +276,17 @@ public:
     return command_buffer;
   }
 
-  auto recreate_swapchain(std::uint32_t w, std::uint32_t h) -> bool {
-    return initialise_swapchain(w, h);
+  auto recreate_swapchain(std::uint32_t w, std::uint32_t h) -> bool override
+  {
+    if (!should_resize)
+      return false;
+    auto could = initialise_swapchain(w, h);
+    should_resize = !could;
+    return could;
   }
   auto get_current_swapchain_texture() -> TextureHandle override;
 
-auto submit(ICommandBuffer& commandBuffer, TextureHandle present)
+  auto submit(ICommandBuffer& commandBuffer, TextureHandle present)
     -> SubmitHandle override;
 
   auto get_immediate_commands() -> ImmediateCommands& override
@@ -317,6 +327,9 @@ auto submit(ICommandBuffer& commandBuffer, TextureHandle present)
                             0,
                             nullptr);
   }
+
+  auto resize_next_frame() { should_resize = true; }
+  auto swapchain_needs_resize() { should_resize = true; }
 
   static auto create(const Window&, const ContextConfiguration& = {})
     -> std::expected<std::unique_ptr<IContext>, ContextError>;

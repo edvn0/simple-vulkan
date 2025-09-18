@@ -322,6 +322,9 @@ CommandBuffer::cmd_begin_rendering(const RenderPass& render_pass,
                                 static_cast<std::int32_t>(scissor.y), },
                     .extent = { scissor.width, scissor.height, }, };
   vkCmdSetScissor(wrapper->command_buffer, 0, 1, &rect);
+
+  BindlessAccess<VulkanContext>::process_pre_frame_work(*context);
+
   vkCmdBeginRendering(wrapper->command_buffer, &rendering_info);
 }
 

@@ -157,7 +157,6 @@ ImmediateCommands::purge() -> void
   }
 }
 
-
 auto
 ImmediateCommands::submit(const CommandBufferWrapper& wrapper) -> SubmitHandle
 {
@@ -279,12 +278,12 @@ ImmediateCommands::wait_semaphore(VkSemaphore s) -> void
 
 void
 ImmediateCommands::signal_semaphore(VkSemaphore semaphore,
-                                    std::uint64_t signalValue)
+                                    std::uint64_t signal_value)
 {
   assert(signal_semaphore_info.semaphore == VK_NULL_HANDLE);
 
   signal_semaphore_info.semaphore = semaphore;
-  signal_semaphore_info.value = signalValue;
+  signal_semaphore_info.value = signal_value;
 }
 
 auto

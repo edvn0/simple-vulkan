@@ -271,22 +271,24 @@ App::create(const ApplicationConfiguration& config)
                                                   std::move(tmp) };
 }
 
-
-
 auto
 App::attach_context(IContext& ctx) -> bool
 {
   context = &ctx;
 
   glfwSetWindowUserPointer(static_cast<GLFWwindow*>(window->opaque_handle),
-                           &ctx);
+                           this);
 
   glfwSetFramebufferSizeCallback(
-    static_cast<GLFWwindow*>(window->opaque_handle), [](GLFWwindow* win, int w, int h) -> void {
-      auto* glfw_context =
-        static_cast<IContext*>(glfwGetWindowUserPointer(win));
-      glfw_context->recreate_swapchain(w, h);
-      });
+    static_cast<GLFWwindow*>(window->opaque_handle),
+    [](GLFWwindow* win, int w, int h) -> void {
+      auto* app = static_cast<App*>(glfwGetWindowUserPointer(win));
+
+      auto* context = static_cast<VulkanContext*>(app->context);
+      app->window->width = static_cast<std::uint32_t>(w);
+      app->window->height = static_cast<std::uint32_t>(h);
+      context->resize_next_frame();
+    });
 
   return true;
 }
