@@ -30,3 +30,13 @@ add_executable(simple-vulkan "simple-vulkan.cpp")
 target_link_libraries(simple-vulkan PRIVATE sv)
 set_target_properties(simple-vulkan PROPERTIES CXX_STANDARD 23)
 target_compile_options(simple-vulkan PRIVATE /W4 /WX /permissive- /Zc:__cplusplus /EHsc)
+
+set(SHADER_DIR ${CMAKE_SOURCE_DIR}/shaders)
+set(SHADER_OUTPUT_DIR ${CMAKE_BINARY_DIR}/shaders)
+
+add_custom_command(
+    TARGET simple-vulkan POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${SHADER_DIR}
+            ${SHADER_OUTPUT_DIR}
+)

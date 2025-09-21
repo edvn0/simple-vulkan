@@ -71,7 +71,7 @@ FetchContent_MakeAvailable(spirv-reflect)
 FetchContent_Declare(
   tracy
   GIT_REPOSITORY https://github.com/wolfpld/tracy.git
-  GIT_TAG master
+  GIT_TAG v0.12.2
 )
 FetchContent_MakeAvailable(tracy)
 

@@ -48,6 +48,8 @@ struct Window
   bool is_fullscreen{ fullscreen };
   App* owned_by{ nullptr };
   void* opaque_handle{ nullptr };
+
+  auto extent() const { return std::make_tuple(width, height); }
 };
 
 struct InitialisationError
@@ -64,6 +66,8 @@ struct InitialisationError
 };
 
 struct IContext;
+struct IRenderer;
+
 class App
 {
 
@@ -74,6 +78,7 @@ class App
   std::unique_ptr<TrackingAllocator, PimplDeleter> allocator{ nullptr };
   std::unique_ptr<Window> window{ nullptr };
   IContext* context{ nullptr };
+  IRenderer* renderer{ nullptr };
 
   App(const ApplicationConfiguration&, std::unique_ptr<Window>);
 
@@ -90,7 +95,7 @@ public:
   static auto create(const ApplicationConfiguration&)
     -> std::expected<App, InitialisationError>;
 
-  auto attach_context(IContext&) -> bool;
+  auto attach_context(IContext&, IRenderer&) -> bool;
   auto detach_context() -> void;
 };
 

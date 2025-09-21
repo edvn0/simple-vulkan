@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sv/object_handle.hpp"
+#include "sv/object_holder.hpp"
 
 #include <array>
 #include <cassert>
@@ -597,6 +598,19 @@ struct Framebuffer final
   {
     TextureHandle texture{};
     TextureHandle resolve_texture{};
+
+    AttachmentDescription() = default;
+    AttachmentDescription(const Holder<TextureHandle>& tex,
+                          const Holder<TextureHandle>& res = {})
+      : AttachmentDescription(*tex, *res)
+    {
+    }
+    AttachmentDescription(const TextureHandle tex, const TextureHandle res = {})
+      : texture(tex)
+      , resolve_texture(res)
+    {
+    
+    }
   };
 
   std::array<AttachmentDescription, max_colour_attachments> color{};

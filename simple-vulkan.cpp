@@ -45,11 +45,11 @@ run(std::span<const std::string_view> args)
   if (!maybe_ctx)
     return 1;
   auto context = std::move(maybe_ctx.value());
+  Renderer renderer{ *context, app.get_window().extent() };
 
-  if (!app.attach_context(*context))
+  if (!app.attach_context(*context, renderer))
     return 1;
 
-  Renderer renderer{ *context };
 
   while (!app.should_close()) {
     context->recreate_swapchain(app.get_window().width,

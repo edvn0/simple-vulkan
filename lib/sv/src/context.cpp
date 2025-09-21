@@ -304,8 +304,8 @@ struct VulkanContext::TracingImpl
 {
 #if defined(HAS_TRACY_TRACING)
   TracyVkCtx vulkan_context = nullptr;
-  VkCommandPool tracy_command_pool = VK_NULL_HANDLE;
-  VkCommandBuffer tracy_command_buffer = VK_NULL_HANDLE;
+  VkCommandPool command_pool = VK_NULL_HANDLE;
+  VkCommandBuffer command_buffer = VK_NULL_HANDLE;
 #endif // HAS_TRACY_TRACING
 };
 
@@ -329,7 +329,7 @@ VulkanContext::initialise_tracing() -> void
   }
 
   std::vector<VkTimeDomainEXT> time_domains;
-  static constexpr auto has_calibrated_timestamps = true; // Read from somewhere
+  static constexpr auto has_calibrated_timestamps = false; // Read from somewhere
   if constexpr (has_calibrated_timestamps) {
     uint32_t time_domain_count = 0;
     get_calibrateable_time_domains(
@@ -355,7 +355,7 @@ VulkanContext::initialise_tracing() -> void
                                    vkResetQueryPool,
                                    get_calibrateable_time_domains,
                                    get_calibrated_timestamps);
-  } /*else {
+  } else {
     const VkCommandPoolCreateInfo ciCommandPool = {
       .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
       .pNext = nullptr,
@@ -364,35 +364,35 @@ VulkanContext::initialise_tracing() -> void
       .queueFamilyIndex = graphics_family,
     };
     vkCreateCommandPool(
-      device, &ciCommandPool, nullptr, &tracing->tracyCommandPool_);
-    lvk::setDebugObjectName(
-      device,
-      VK_OBJECT_TYPE_COMMAND_POOL,
-      (uint64_t)tracing->tracyCommandPool_,
-      "Command Pool: VulkanContextImpl::tracyCommandPool_");
+      device, &ciCommandPool, nullptr, &tracing->command_pool);
+    //lvk::setDebugObjectName(
+     // device,
+     // VK_OBJECT_TYPE_COMMAND_POOL,
+     // (uint64_t)tracing->command_pool,
+     // "Command Pool: VulkanContextImpl::command_pool");
     const VkCommandBufferAllocateInfo aiCommandBuffer = {
       .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-      .commandPool = tracing->tracyCommandPool_,
+      .commandPool = tracing->command_pool,
       .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
       .commandBufferCount = 1,
     };
     vkAllocateCommandBuffers(
-      device, &aiCommandBuffer, &tracing->tracyCommandBuffer_);
-    if (hasCalibratedTimestamps_) {
+      device, &aiCommandBuffer, &tracing->command_buffer);
+    if (has_calibrated_timestamps) {
       tracing->vulkan_context =
         TracyVkContextCalibrated(device.physical_device,
                                  device,
-                                 deviceQueues_.graphicsQueue,
-                                 tracing->tracyCommandBuffer_,
-                                 vkGetPhysicalDeviceCalibrateableTimeDomainsEXT,
-                                 vkGetCalibratedTimestampsEXT);
+                                 graphics_queue,
+                                 tracing->command_buffer,
+                                 get_calibrateable_time_domains,
+                                 get_calibrated_timestamps);
     } else {
       tracing->vulkan_context = TracyVkContext(device.physical_device,
                                                device,
-                                               deviceQueues_.graphicsQueue,
-                                               tracing->tracyCommandBuffer_);
+                                               graphics_queue,
+                                               tracing->command_buffer);
     };
-  }*/
+  }
   assert(tracing->vulkan_context);
 #endif // HAS_TRACY_TRACING
 }
@@ -404,8 +404,8 @@ VulkanContext::~VulkanContext()
 
 #if defined(HAS_TRACY_TRACING)
   TracyVkDestroy(tracing->vulkan_context);
-  if (tracing->tracy_command_pool) {
-    vkDestroyCommandPool(device, tracing->tracy_command_pool, nullptr);
+  if (tracing->command_pool) {
+    vkDestroyCommandPool(device, tracing->command_pool, nullptr);
   }
 #endif // HAS_TRACY_TRACING
 

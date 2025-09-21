@@ -272,9 +272,10 @@ App::create(const ApplicationConfiguration& config)
 }
 
 auto
-App::attach_context(IContext& ctx) -> bool
+App::attach_context(IContext& ctx, IRenderer& r) -> bool
 {
   context = &ctx;
+  renderer = &r;
 
   glfwSetWindowUserPointer(static_cast<GLFWwindow*>(window->opaque_handle),
                            this);
@@ -287,6 +288,9 @@ App::attach_context(IContext& ctx) -> bool
       auto* context = static_cast<VulkanContext*>(app->context);
       app->window->width = static_cast<std::uint32_t>(w);
       app->window->height = static_cast<std::uint32_t>(h);
+
+      app->renderer->resize(app->window->width, app->window->height);
+
       context->resize_next_frame();
     });
 

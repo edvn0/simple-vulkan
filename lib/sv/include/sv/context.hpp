@@ -338,7 +338,6 @@ public:
   }
 
   auto resize_next_frame() { should_resize = true; }
-  auto swapchain_needs_resize() { should_resize = true; }
 
   static auto create(const Window&, const ContextConfiguration& = {})
     -> std::expected<std::unique_ptr<IContext>, ContextError>;
