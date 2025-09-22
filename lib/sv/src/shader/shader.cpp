@@ -163,6 +163,8 @@ VulkanShader::create(IContext& context, const std::filesystem::path& path)
   auto& pool = context.get_shader_module_pool();
   auto compiled = VulkanShader::compile(context, path);
   if (!compiled) {
+    std::cerr << std::format("File {} - ", path.filename().string())
+              << compiled.error().error << "\n";
     return {};
   }
 

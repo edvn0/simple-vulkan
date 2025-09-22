@@ -74,6 +74,9 @@ struct IContext
 
   virtual auto get_immediate_commands() -> ImmediateCommands& = 0;
   virtual auto get_staging_allocator() -> StagingAllocator& = 0;
+
+  virtual auto recreate_texture(const Holder<TextureHandle>&,
+                                const TextureDescription&) -> void = 0;
 };
 
 }

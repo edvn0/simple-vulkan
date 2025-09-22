@@ -10,6 +10,7 @@
 #include "sv/object_handle.hpp"
 #include "sv/object_pool.hpp"
 #include "sv/staging_allocator.hpp"
+#include "sv/texture.hpp"
 
 #include <VkBootstrap.h>
 #include <deque>
@@ -23,6 +24,27 @@
 namespace sv {
 
 struct Window;
+
+template<typename T>
+static constexpr auto
+get_mapped_pointer(IContext& ctx, const BufferHandle h) -> T*
+{
+  auto* mapped = ctx.get_buffer_pool().get(h)->allocation_info.pMappedData;
+  return reinterpret_cast<T*>(mapped);
+}
+
+template<typename Fmt = VkFormat>
+  requires(std::is_same_v<Fmt, VkFormat> || std::is_same_v<Fmt, Format>)
+static constexpr auto
+get_format(IContext& ctx, const TextureHandle h) -> Fmt
+{
+  auto* img = ctx.get_texture_pool().get(h);
+  if constexpr (std::is_same_v<Fmt, VkFormat>) {
+    return img->format;
+  } else {
+    return vk_format_to_format(img->format);
+  }
+}
 
 class DeviceAllocator
 {
@@ -183,9 +205,9 @@ class VulkanContext final : public IContext
                 vkb::InstanceDispatchTable&& idt,
                 VkSurfaceKHR surf,
                 VkQueue gq,
-                std::uint32_t gfam,
+                std::uint32_t,
                 VkQueue pq,
-                std::uint32_t pfam);
+                std::uint32_t);
 
 public:
   ~VulkanContext();
@@ -338,6 +360,12 @@ public:
   }
 
   auto resize_next_frame() { should_resize = true; }
+  auto get_swapchain() const -> const auto& { return *swapchain; }
+
+  auto destroy_texture_resources(VulkanTextureND& tex) -> void;
+
+  auto recreate_texture(const Holder<TextureHandle>&, const TextureDescription&)
+    -> void override;
 
   static auto create(const Window&, const ContextConfiguration& = {})
     -> std::expected<std::unique_ptr<IContext>, ContextError>;

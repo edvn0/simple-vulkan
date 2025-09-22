@@ -1,16 +1,20 @@
 #include "sv/renderer.hpp"
 
 #include "sv/app.hpp"
+#include "sv/camera.hpp"
 #include "sv/common.hpp"
 #include "sv/object_handle.hpp"
+#include "sv/pipeline.hpp"
 #include "sv/shader/shader.hpp"
 #include "sv/transitions.hpp"
-#include "vulkan/vulkan_core.h"
 
-#include "sv/simple-mesh.hpp"
+#include <sv/simple-mesh.hpp>
+
+#include <imgui.h>
 
 #include <GLFW/glfw3.h>
 #include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
 
 namespace sv {
 
@@ -103,28 +107,21 @@ struct Renderer::Impl
   simple::SimpleGeometryMesh simple;
 };
 
-Renderer::Renderer(IContext& ctx, const std::tuple<std::uint32_t, std::uint32_t>& extent)
+Renderer::Renderer(IContext& ctx,
+                   const std::tuple<std::uint32_t, std::uint32_t>& extent)
   : context(&ctx)
-  , impl(std::unique_ptr<Renderer::Impl, PimplDeleter>(new Renderer::Impl{}, PimplDeleter{}))
-{
-  basic_shader = VulkanShader::create(ctx, "shaders/simple.glsl");
-  basic = VulkanGraphicsPipeline::create(
-    ctx,
-    {
-      .shader = *basic_shader,
-      .color = { ColourAttachment{
-        .format = Format::BGRA_UN8,
-      } ,},
-      .debug_name = "Basic"
-    });
+  , impl(std::unique_ptr<Renderer::Impl, PimplDeleter>(new Renderer::Impl{},
+                                                       PimplDeleter{}))
+  , ubo{ ctx, 3 }
 
+{
   impl->simple = simple::SimpleGeometryMesh::create(
     *context,
-    simple::SimpleGeometryParams{ 
-          .kind = simple::SimpleGeometryParams::Kind::Cube,
-          .half_extents = glm::vec3{ 5, 5, 5 },
-          .debug_name = "Cube",
-  });
+    simple::SimpleGeometryParams{
+      .kind = simple::SimpleGeometryParams::Kind::Cube,
+      .half_extents = glm::vec3{ 5, 5, 5 },
+      .debug_name = "Cube",
+    });
 
   const auto vertex_input = VertexInput::create({
     VertexFormat::Float3,
@@ -132,7 +129,8 @@ Renderer::Renderer(IContext& ctx, const std::tuple<std::uint32_t, std::uint32_t>
     VertexFormat::Float2,
   });
 
-  deferred_mrt.shader = VulkanShader::create(ctx, "shaders/gbuffer_object.glsl");
+  deferred_mrt.shader =
+    VulkanShader::create(ctx, "shaders/gbuffer_object.glsl");
   deferred_mrt.pipeline = VulkanGraphicsPipeline::create(
     ctx,
     {
@@ -143,14 +141,17 @@ Renderer::Renderer(IContext& ctx, const std::tuple<std::uint32_t, std::uint32_t>
       }, ColourAttachment {
           .format = Format::A2R10G10B10_UN,
 }
-      
+      ,
+    ColourAttachment {
+          .format = Format::RG_F16,
+}
       ,},
       .depth_format = Format::Z_F32_S_UI8,
       .debug_name = "MRT GBuffer"
     });
 
   deferred_hdr_gbuffer.shader =
-    VulkanShader::create(ctx, "shaders/lighting_gbuffer.glsl");
+    VulkanShader::create(ctx, "shaders/gbuffer_lighting.glsl");
   deferred_hdr_gbuffer.pipeline =
   VulkanGraphicsPipeline::create(
     ctx,
@@ -162,82 +163,135 @@ Renderer::Renderer(IContext& ctx, const std::tuple<std::uint32_t, std::uint32_t>
       .debug_name = "Lighting GBuffer"
     });
 
+  tonemap.shader = VulkanShader::create(ctx, "shaders/tonemap_hdr_to_sdr.glsl");
+  tonemap.pipeline =VulkanGraphicsPipeline::create(
+    ctx,
+    {
+      .shader = *tonemap.shader,
+      .color = { ColourAttachment{
+        .format = Format::BGRA_UN8,
+      } ,},
+      .debug_name = "Tonemap"
+    });
+
+  grid.shader = VulkanShader::create(*context, "shaders/grid.shader");
+  grid.pipeline = VulkanGraphicsPipeline::create(
+    *context,
+    {
+      .shader = *grid.shader,
+      .color = { ColourAttachment{
+        .format = Format::RGBA_F32,
+        .blend_enabled = true,
+        .src_rgb_blend_factor = BlendFactor::SrcAlpha,
+        .dst_rgb_blend_factor = BlendFactor::OneMinusSrcAlpha,
+      } },
+      .depth_format = Format::Z_F32_S_UI8,
+      .debug_name = "Grid Pipeline",
+    });
 
   auto&& [w, h] = extent;
   resize(w, h);
+
+  imgui = std::make_unique<ImGuiRenderer>(*context, "fonts/Roboto-Regular.ttf");
 }
+
+Renderer::~Renderer() = default;
 
 auto
 Renderer::resize(const std::uint32_t width, const std::uint32_t height) -> void
 {
-  deferred_hdr_gbuffer.hdr = 
-    VulkanTextureND::create(
-    *context,
-    TextureDescription{
-      .format = Format::RGBA_F32,
-      .dimensions = { width, height },
-      .usage_bits = TextureUsageBits::Sampled | TextureUsageBits::Attachment,
-      .debug_name = "GBuffer_Lighting_HDR_RGBA_F32",
-    });
+  const auto ensure = [this](auto& h, const TextureDescription& d) {
+    if (h.valid())
+      context->recreate_texture(h, d);
+    else
+      h = VulkanTextureND::create(*context, d);
+  };
 
-    deferred_mrt.depth_32 = VulkanTextureND::create(
-    *context,
-    TextureDescription{
-      .format = Format::Z_F32_S_UI8,
-      .dimensions = { width, height },
-      .usage_bits = TextureUsageBits::Sampled | TextureUsageBits::Attachment,
-      .debug_name = "MRT_Depth_F32_S_UI8",
-    });
+  const auto hdr_desc = TextureDescription{
+    .format = Format::RGBA_F32,
+    .dimensions = { width, height },
+    .usage_bits = TextureUsageBits::Sampled | TextureUsageBits::Attachment,
+    .debug_name = "GBuffer_Lighting_HDR_RGBA_F32",
+  };
+  ensure(deferred_hdr_gbuffer.hdr, hdr_desc);
 
-  deferred_mrt.material_id = VulkanTextureND::create(
-    *context,
-    TextureDescription{
-      .format = Format::R_UI32,
-      .dimensions = { width, height },
-      .usage_bits = TextureUsageBits::Sampled | TextureUsageBits::Attachment,
-      .debug_name = "MRT_Material_R32",
-    });
+  const auto depth_desc = TextureDescription{
+    .format = Format::Z_F32_S_UI8,
+    .dimensions = { width, height },
+    .usage_bits = TextureUsageBits::Sampled | TextureUsageBits::Attachment,
+    .debug_name = "MRT_Depth_F32_S_UI8",
+  };
+  ensure(deferred_mrt.depth_32, depth_desc);
 
-  deferred_mrt.oct_normals_extras_tbd = VulkanTextureND::create(
-      *context,
-      TextureDescription{
-        .format = Format::A2R10G10B10_UN,
-        .dimensions = { width, height },
-        .usage_bits = TextureUsageBits::Sampled | TextureUsageBits::Attachment,
-        .debug_name = "MRT_Normals_A1R5G5B5",
-      });
+  const auto material_id_desc = TextureDescription{
+    .format = Format::R_UI32,
+    .dimensions = { width, height },
+    .usage_bits = TextureUsageBits::Sampled | TextureUsageBits::Attachment,
+    .debug_name = "MRT_Material_R32",
+  };
+  ensure(deferred_mrt.material_id, material_id_desc);
 
-    deferred_extent = { width, height };
+  const auto uvs_desc = TextureDescription{
+    .format = Format::RG_F16,
+    .dimensions = { width, height },
+    .usage_bits = TextureUsageBits::Sampled | TextureUsageBits::Attachment,
+    .debug_name = "MRT_UVS_RGF16",
+  };
+  ensure(deferred_mrt.uvs, uvs_desc);
+
+  const auto normals_desc = TextureDescription{
+    .format = Format::A2R10G10B10_UN,
+    .dimensions = { width, height },
+    .usage_bits = TextureUsageBits::Sampled | TextureUsageBits::Attachment,
+    .debug_name = "MRT_Normals_A1R5G5B5",
+  };
+  ensure(deferred_mrt.oct_normals_extras_tbd, normals_desc);
+
+  deferred_extent = { width, height };
 }
 
 auto
 Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
 {
-  const RenderPass gbuffer_render_pass{
-    .color{
-      RenderPass::AttachmentDescription{
-        .load_op = LoadOp::Clear,
-        .store_op = StoreOp::Store,
-        .clear_colour = { std::array<float, 4>{ 0, 0, 0, 0 } },
+  // Couple of phases.
+  // 1: GBuffer static meshes, fully multidraw indirect
+  // 1*: Shadows somehow
+  // 2: Resolve lighting, sample gbuffer
+  // 3: Forward rendering into the resolved lighting
+  // 4: Sample resolved lighting in the swapchain
+
+  {
+    const RenderPass gbuffer_render_pass{
+      .color{
+        RenderPass::AttachmentDescription{
+          .load_op = LoadOp::Clear,
+          .store_op = StoreOp::Store,
+          .clear_colour = { std::array<float, 4>{ 0, 0, 0, 0 } },
+        },
+        RenderPass::AttachmentDescription{
+          .load_op = LoadOp::Clear,
+          .store_op = StoreOp::Store,
+          .clear_colour = { std::array<float, 4>{ 0, 0, 0, 0 } },
+        },
+        RenderPass::AttachmentDescription{
+          .load_op = LoadOp::Clear,
+          .store_op = StoreOp::Store,
+          .clear_colour = { std::array<float, 4>{ 0, 0, 0, 0 } },
+        },
       },
-      RenderPass::AttachmentDescription{
-        .load_op = LoadOp::Clear,
-        .store_op = StoreOp::Store,
-        .clear_colour = { std::array<float, 4>{ 0, 0, 0, 0 } },
-      },
-    },
       .depth =
         RenderPass::AttachmentDescription{
           .load_op = LoadOp::Clear,
           .store_op = StoreOp::Store,
           .clear_depth = 0.0F, // Reverse Z
         },
-  };
+    };
 
-  const Framebuffer gbuffer_framebuffer{
+    const Framebuffer gbuffer_framebuffer{
     .color = {
       Framebuffer::AttachmentDescription{deferred_mrt.material_id},
       Framebuffer::AttachmentDescription{deferred_mrt.oct_normals_extras_tbd},
+      Framebuffer::AttachmentDescription{deferred_mrt.uvs},
     },
     .depth_stencil = {
           deferred_mrt.depth_32,
@@ -245,56 +299,228 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
     .debug_name = "MRT_GBuffer"
   };
 
-  buf.cmd_begin_rendering(gbuffer_render_pass, gbuffer_framebuffer, {});
-  // Here we'll render using an indirect buffer with VkDrawIndirectCommand in the indirect buffer.
-  // For now, a super simple cube from a VB & IB
-  buf.cmd_bind_graphics_pipeline(*deferred_mrt.pipeline);
-  buf.cmd_bind_depth_state({
-      .compare_operation = CompareOp::Greater, 
+    buf.cmd_begin_rendering(gbuffer_render_pass, gbuffer_framebuffer, {});
+    // Here we'll render using an indirect buffer with VkDrawIndirectCommand in
+    // the indirect buffer. For now, a super simple cube from a VB & IB
+    buf.cmd_bind_graphics_pipeline(*deferred_mrt.pipeline);
+    buf.cmd_bind_depth_state({
+      .compare_operation = CompareOp::Greater,
       .is_depth_write_enabled = true,
-  });
-  buf.cmd_bind_vertex_buffer(0, *impl->simple.vertex_buffer, 0);
-  buf.cmd_bind_index_buffer(*impl->simple.index_buffer, IndexFormat::UI32, 0);
-  buf.cmd_draw_indexed(impl->simple.index_count, 1, 0, 0, 0);
-  buf.cmd_end_rendering();
+    });
+    buf.cmd_bind_vertex_buffer(0, *impl->simple.vertex_buffer, 0);
+    buf.cmd_bind_index_buffer(*impl->simple.index_buffer, IndexFormat::UI32, 0);
 
+    auto rotate = glm::rotate(glm::mat4{ 1.0F },
+                              static_cast<float>(glfwGetTime()),
+                              glm::vec3{ 0.0F, 1.0F, 1.0F });
 
-  const RenderPass basic_render_pass {
-    .color {
-      RenderPass::AttachmentDescription{
-        .load_op = LoadOp::Clear,
-        .store_op = StoreOp::Store,
-        .clear_colour = {std::array<float, 4>{0,0,0,0}}
-      },
+    struct PC
+    {
+      glm::mat4 model;
+      std::uint64_t ubo_ref;
+      std::uint32_t material_index;
+    } pc{
+      .model = rotate,
+      .ubo_ref = ubo.get(current_frame),
+      .material_index = 0,
+    };
+    buf.cmd_push_constants(pc, 0);
+    buf.cmd_draw_indexed(impl->simple.index_count, 1, 0, 0, 0);
+    buf.cmd_end_rendering();
+  }
+
+  {
+    buf.cmd_begin_rendering(
+      { .color = { RenderPass::AttachmentDescription{
+          .load_op = LoadOp::Clear,
+          .store_op = StoreOp::Store,
+          .clear_colour = std::array<float, 4>{ 0, 0, 0, 0 },
+        } } },
+      { .color = { Framebuffer::AttachmentDescription{
+          *deferred_hdr_gbuffer.hdr, }, }, },
+      {});
+    buf.cmd_bind_graphics_pipeline(*deferred_hdr_gbuffer.pipeline);
+    struct PC
+    {
+      std::uint32_t normals_tex;
+      std::uint32_t depth_tex;
+      std::uint32_t material_tex;
+      std::uint32_t sampler_id;
+    } pc{
+      deferred_mrt.oct_normals_extras_tbd.index(),
+      deferred_mrt.depth_32.index(),
+      deferred_mrt.material_id.index(),
+      0,
+    };
+    buf.cmd_bind_depth_state({
+      .compare_operation = CompareOp::AlwaysPass,
+    });
+    buf.cmd_push_constants(pc, 0);
+    buf.cmd_draw(3, 1, 0, 0);
+    buf.cmd_end_rendering();
+  }
+
+  {
+    RenderPass forward_pass{
+    .color = {
+        RenderPass::AttachmentDescription{
+            .load_op = LoadOp::Load,
+            .store_op = StoreOp::Store,
+        },
     },
-  };
+    .depth = {.load_op = LoadOp::Load, .store_op = StoreOp::DontCare,},
+    .stencil = {},
+    .layer_count = 1,
+    .view_mask = 0,
+    };
 
-  const Framebuffer basic_framebuffer { 
-      .color = { Framebuffer::AttachmentDescription{
-                   present,
-                 } },
-                 .debug_name = "Swapchain" };
+    Framebuffer forward_framebuffer{
+    .color = {
+        Framebuffer::AttachmentDescription{  *deferred_hdr_gbuffer.hdr },
+    },
+    .depth_stencil = {
+      *deferred_mrt.depth_32
+    },
+    .debug_name = "Forward FB",
+};
+    buf.cmd_begin_rendering(forward_pass, forward_framebuffer, {});
+    buf.cmd_bind_graphics_pipeline(*grid.pipeline);
+    buf.cmd_bind_depth_state({
+      .compare_operation = CompareOp::Greater,
+    });
+    struct GridPC
+    {
+      std::uint64_t ubo_address; // matches UBO pc
+      std::uint64_t padding{ 0 };
+      alignas(16) glm::vec4 origin;
+      alignas(16) glm::vec4 grid_colour_thin;
+      alignas(16) glm::vec4 grid_colour_thick;
+      alignas(16) glm::vec4 grid_params;
+    };
+    GridPC grid_pc{
+      .ubo_address = ubo.get(current_frame),
+      .origin = glm::vec4{ 0.0f },
+      .grid_colour_thin = glm::vec4{ 0.5f, 0.5f, 0.5f, 1.0f },
+      .grid_colour_thick = glm::vec4{ 0.15f, 0.15f, 0.15f, 1.0f },
+      .grid_params = glm::vec4{ 100.0f, 0.025f, 2.0f, 0.0f },
+    };
+    buf.cmd_push_constants<GridPC>(grid_pc, 0);
+    buf.cmd_draw(6, 1, 0, 0);
 
-  buf.cmd_begin_rendering(basic_render_pass, basic_framebuffer, {});
-  buf.cmd_bind_graphics_pipeline(*basic);
-  buf.cmd_bind_depth_state({});
-  auto size = context->get_texture_pool().get(present)->extent;
+    canvas_3d.clear();
 
-  auto projection = glm::ortho<float>(0.F,1.F, 0, 1.F, 1.0F, 0.0F);
-  auto view = glm::mat4{ 1.0F };
+    canvas_3d.box(glm::translate(glm::mat4{ 1.0F }, glm::vec3{ 5, 5, 0 }),
+                  BoundingBox(glm::vec3(-2), glm::vec3(+2)),
+                  glm::vec4(1, 1, 0, 1));
+    static auto initial_pos = -8.F;
+    auto&& [w, h] = deferred_extent;
+    canvas_3d.frustum(
+      glm::lookAt(
+        glm::vec3(cos(glfwGetTime()), initial_pos, sin(glfwGetTime())),
+        glm::vec3{ 0, 0, 0 },
+        glm::vec3(0.0f, 1.0f, 0.0f)),
+      glm::perspective(
+        glm::radians(60.0f), static_cast<float>(w) / h, 10.0f, 30.0f),
+      glm::vec4(1, 1, 1, 1));
+    canvas_3d.render(*context, forward_framebuffer, buf, 1);
 
-  const struct Time
+    buf.cmd_end_rendering();
+  }
+
   {
-    float t{ static_cast<float>(glfwGetTime()) };
-    std::uint32_t tex_index{ 0 };
-    glm::mat4 mvp;
-  } pc
+    const RenderPass tonemap_render_pass{
+      .color{
+        RenderPass::AttachmentDescription{
+          .load_op = LoadOp::Clear,
+          .store_op = StoreOp::Store,
+          .clear_colour = { std::array<float, 4>{ 0, 0, 0, 0 } },
+        },
+      },
+    };
+
+    const Framebuffer tonemap_framebuffer{
+      .color = { Framebuffer::AttachmentDescription{ present } },
+      .debug_name = "Swapchain_Tonemap"
+    };
+
+    buf.cmd_begin_rendering(tonemap_render_pass, tonemap_framebuffer, {});
+    buf.cmd_bind_graphics_pipeline(*tonemap.pipeline);
+    buf.cmd_bind_depth_state({});
+    const struct TonemapPC
+    {
+      std::uint32_t hdr_tex;
+      std::uint32_t sampler_id;
+      float exposure;
+    } tonemap_pc{
+      .hdr_tex = deferred_hdr_gbuffer.hdr.index(),
+      .sampler_id = 0,
+      .exposure = 1.0F,
+    };
+    buf.cmd_push_constants(tonemap_pc, 0);
+    buf.cmd_draw(3, 1, 0, 0);
+    buf.cmd_end_rendering();
+  }
+
   {
-    .mvp = projection * view
-  };
-  buf.cmd_push_constants(pc, 0);
-  buf.cmd_draw(3, 1, 0, 0);
-  buf.cmd_end_rendering();
+    const RenderPass ui_render_pass{
+      .color{
+        RenderPass::AttachmentDescription{
+          .load_op = LoadOp::Load,
+          .store_op = StoreOp::Store,
+        },
+      },
+    };
+
+    const Framebuffer ui_framebuffer{
+      .color = { Framebuffer::AttachmentDescription{ present } },
+      .debug_name = "Swapchain_UI"
+    };
+
+    buf.cmd_begin_rendering(ui_render_pass, ui_framebuffer, {});
+
+    imgui->begin_frame(ui_framebuffer);
+    ImGui::Begin("Light direction");
+    ImGui::SliderAngle("Light Direction (phi)",
+                       &rad_phi,
+                       0.0F,
+                       360.0F,
+                       "%.1f",
+                       ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SliderAngle("Light Direction (theta)",
+                       &rad_theta,
+                       -180.0F,
+                       180.0F,
+                       "%.1f",
+                       ImGuiSliderFlags_AlwaysClamp);
+    ImGui::End();
+    imgui->end_frame(buf);
+
+    buf.cmd_end_rendering();
+  }
+
+  current_frame++;
+}
+
+auto
+Renderer::begin_frame(const Camera& camera) -> void
+{
+  glm::vec3 dir{};
+
+  dir.x = glm::cos(rad_phi) * glm::cos(rad_theta);
+  dir.y = glm::sin(rad_phi);
+  dir.z = glm::cos(rad_phi) * glm::sin(rad_theta);
+  dir = -glm::normalize(dir);
+
+  const auto aspect = static_cast<float>(std::get<0>(deferred_extent)) /
+                      static_cast<float>(std::get<1>(deferred_extent));
+  const auto proj =
+    glm::perspective(glm::radians(70.0F), aspect, 0.01F, 1000.0F);
+  auto constructed_ubo = this->create_ubo(camera.get_view_matrix(), proj);
+  constructed_ubo.light_direction = glm::vec4(dir, 0.0f);
+  constructed_ubo.camera_position = glm::vec4(camera.get_position(), 1.0F);
+  ubo.upload(current_frame, constructed_ubo);
+
+  canvas_3d.set_mvp(proj * camera.get_view_matrix());
 }
 
 }

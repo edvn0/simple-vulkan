@@ -1,5 +1,6 @@
 ﻿#include "GLFW/glfw3.h"
 #include "sv/app.hpp"
+#include "sv/camera.hpp"
 #include "sv/context.hpp"
 #include "sv/renderer.hpp"
 
@@ -18,7 +19,7 @@ parse_mode(const std::string_view val)
 }
 }
 
-auto
+static auto
 run(std::span<const std::string_view> args)
 {
   using namespace sv;
@@ -46,18 +47,24 @@ run(std::span<const std::string_view> args)
     return 1;
   auto context = std::move(maybe_ctx.value());
   Renderer renderer{ *context, app.get_window().extent() };
+  Camera camera(
+    std::make_unique<FirstPersonCameraBehaviour>(glm::vec3{ 0, 2.0F, -3.0F },
+                                                 glm::vec3{ 0, 0, 0.0F },
+                                                 glm::vec3{ 0, 1, 0 }));
 
   if (!app.attach_context(*context, renderer))
     return 1;
 
-
   while (!app.should_close()) {
-    context->recreate_swapchain(app.get_window().width,
-                                app.get_window().height);
+    auto needed_resize = context->recreate_swapchain(app.get_window().width,
+                                                     app.get_window().height);
     app.poll_events();
 
     auto& cmd = context->acquire_command_buffer();
 
+    if (needed_resize)
+      renderer.resize(app.get_window().width, app.get_window().height);
+    renderer.begin_frame(camera);
     renderer.record(cmd, context->get_current_swapchain_texture());
     context->submit(cmd, context->get_current_swapchain_texture());
   }

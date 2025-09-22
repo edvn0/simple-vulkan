@@ -41,7 +41,7 @@ include_system_callback(void* ctx, const char* header_name, const char*, size_t)
   auto* context = static_cast<IncludeContext*>(ctx);
 
   // Resolve system includes from assets/shaders/include/
-  std::filesystem::path include_path = "assets/shaders/include";
+  std::filesystem::path include_path = "shaders/include";
   std::filesystem::path full_path = include_path / header_name;
 
   std::string content = read_file_to_string(full_path);
@@ -139,7 +139,6 @@ compile_shader(glslang_stage_t stage,
   if (!glslang_shader_preprocess(shader, &input)) {
     std::string error = glslang_shader_get_info_log(shader);
     auto debug_log = glslang_shader_get_info_debug_log(shader);
-    std::cout << "Preprocessing error: " << error << std::endl;
     if (const std::string_view log{ debug_log }; !log.empty()) {
       std::cout << "Debug log: " << debug_log << std::endl;
     }
@@ -149,7 +148,6 @@ compile_shader(glslang_stage_t stage,
   if (!glslang_shader_parse(shader, &input)) {
     std::string error = glslang_shader_get_info_log(shader);
     auto debug_log = glslang_shader_get_info_debug_log(shader);
-    std::cout << "Parsing error: " << error << std::endl;
     if (const std::string_view log{ debug_log }; !log.empty()) {
       std::cout << "Debug log: " << debug_log << std::endl;
     }
@@ -166,7 +164,6 @@ compile_shader(glslang_stage_t stage,
         program, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT)) {
     std::string error = glslang_program_get_info_log(program);
     auto debug_log = glslang_program_get_info_debug_log(program);
-    std::cout << "Linking error: " << error << std::endl;
     if (const std::string_view log{ debug_log }; !log.empty()) {
       std::cout << "Debug log: " << debug_log << std::endl;
     }

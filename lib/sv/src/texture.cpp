@@ -91,14 +91,13 @@ format_to_vk_format(const Format format) -> VkFormat
   return VK_FORMAT_UNDEFINED;
 }
 
-namespace {
-
-[[maybe_unused]] auto
+auto
 vk_format_to_format(const VkFormat format) -> Format
 {
   switch (format) {
     case VK_FORMAT_UNDEFINED:
       return Format::Invalid;
+
     case VK_FORMAT_R8_UINT:
       return Format::R_UI8;
     case VK_FORMAT_R8_UNORM:
@@ -208,31 +207,20 @@ format_is_stencil(const VkFormat format) -> bool
 }
 
 auto
-is_depth_or_stencil_format(const VkFormat format) -> bool
-{
-  return format_is_depth(format) || format_is_stencil(format);
-}
-
-auto
-is_depth_or_stencil_format(const Format format) -> bool
-{
-  return is_depth_or_stencil_format(format_to_vk_format(format));
-}
-}
-
-auto
 VulkanTextureND::create(IContext& ctx, const VkSamplerCreateInfo& info)
   -> Holder<SamplerHandle>
 {
   VkSampler smp;
-  vkCreateSampler(ctx.get_device(), &info, nullptr, &smp);
+  VkSamplerCreateInfo copy{ info };
+  copy.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  vkCreateSampler(ctx.get_device(), &copy, nullptr, &smp);
 
   return Holder{ &ctx, ctx.get_sampler_pool().insert(std::move(smp)) };
 }
 
 auto
-VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
-  -> Holder<TextureHandle>
+VulkanTextureND::build(IContext& ctx, const TextureDescription& desc)
+  -> VulkanTextureND
 {
   assert(!desc.debug_name.empty());
 
@@ -240,25 +228,21 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
     (desc.storage & StorageType::Device) != StorageType{ 0 }
       ? VK_IMAGE_USAGE_TRANSFER_DST_BIT
       : 0;
-  if ((desc.usage_bits & TextureUsageBits::Sampled) != TextureUsageBits{ 0 }) {
+  if ((desc.usage_bits & TextureUsageBits::Sampled) != TextureUsageBits{ 0 })
     usage_flags |= VK_IMAGE_USAGE_SAMPLED_BIT;
-  }
-  if ((desc.usage_bits & TextureUsageBits::Storage) != TextureUsageBits{ 0 }) {
+  if ((desc.usage_bits & TextureUsageBits::Storage) != TextureUsageBits{ 0 })
     usage_flags |= VK_IMAGE_USAGE_STORAGE_BIT;
-  }
   if ((desc.usage_bits & TextureUsageBits::Attachment) !=
       TextureUsageBits{ 0 }) {
     usage_flags |= is_depth_or_stencil_format(desc.format)
                      ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                      : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    if ((desc.storage & StorageType::Transient) != StorageType{ 0 }) {
+    if ((desc.storage & StorageType::Transient) != StorageType{ 0 })
       usage_flags |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-    }
   }
-
-  if (desc.storage != StorageType::Transient) {
+  if (desc.storage != StorageType::Transient)
     usage_flags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-  };
+
   const VkMemoryPropertyFlags memory_flags =
     storage_type_to_vk_memory_property_flags(desc.storage);
 
@@ -275,8 +259,6 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
       image_view_type =
         layer_count > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
       image_type = VK_IMAGE_TYPE_2D;
-      // sample_count = lvk::getVulkanSampleCountFlags(desc.numSamples,
-      //                                            getFramebufferMSAABitMask());
       break;
     case TextureType::Three:
       image_view_type = VK_IMAGE_VIEW_TYPE_3D;
@@ -295,7 +277,6 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
                            desc.dimensions.height,
                            desc.dimensions.depth };
   const auto level_count = desc.mip_count;
-
   const auto vulkan_format = format_to_vk_format(desc.format);
 
   VulkanTextureND image{
@@ -337,6 +318,7 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
                        ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
                        : VmaAllocationCreateFlags{ 0 };
   alloc_info.priority = 1.0F;
+
   vmaCreateImage(DeviceAllocator::the(),
                  &ci,
                  &alloc_info,
@@ -351,14 +333,14 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
 
   VkImageAspectFlags aspect = 0;
   if (image.is_depth_format || image.is_stencil_format) {
-    if (image.is_depth_format) {
+    if (image.is_depth_format)
       aspect |= VK_IMAGE_ASPECT_DEPTH_BIT;
-    } else if (image.is_stencil_format) {
+    else if (image.is_stencil_format)
       aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
-    }
   } else {
     aspect = VK_IMAGE_ASPECT_COLOR_BIT;
   }
+
   const VkComponentMapping mapping = {
     .r = static_cast<VkComponentSwizzle>(desc.swizzle.r),
     .g = static_cast<VkComponentSwizzle>(desc.swizzle.g),
@@ -374,6 +356,7 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
                                              layer_count,
                                              image_view_type,
                                              mapping);
+
   if (image.usage_flags & VK_IMAGE_USAGE_STORAGE_BIT) {
     if (!desc.swizzle.identity()) {
       image.storage_image_view =
@@ -388,33 +371,41 @@ VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
     }
   }
 
+  return image;
+}
+
+auto
+VulkanTextureND::create(IContext& ctx, const TextureDescription& desc)
+  -> Holder<TextureHandle>
+{
+  auto image = build(ctx, desc);
+
   TextureHandle handle = ctx.get_texture_pool().insert(std::move(image));
 
   auto* image_ptr = ctx.get_texture_pool().get(handle);
   set_name(ctx,
            image_ptr->allocation_info.deviceMemory,
            VK_OBJECT_TYPE_DEVICE_MEMORY,
-           "DeviceMemory::{}",
-           image_debug_name);
+           "DeviceMemory::Image::{}",
+           desc.debug_name);
 
   ctx.update_resources();
+
   if (!desc.pixel_data.empty()) {
     ctx.get_staging_allocator().upload(
       handle,
       VkRect2D{
         .offset = { 0, 0 },
-        .extent = { extent.width, extent.height },
-      },
+        .extent = { image_ptr->extent.width, image_ptr->extent.height } },
       0,
-      level_count,
+      image_ptr->level_count,
       0,
-      layer_count,
-      vulkan_format,
+      image_ptr->layer_count,
+      image_ptr->format,
       desc.pixel_data.data(),
       0);
-    /*if (desc.generate_mipmaps)
-      ctx.generate_mipmaps(handle);*/
   }
+
   return Holder{ &ctx, handle };
 }
 
@@ -461,11 +452,21 @@ VulkanTextureND::get_or_create_image_view_for_framebuffer(IContext& ctx,
 {
   auto& cached = framebuffer_image_views.at(level).at(layer);
 
+  VkImageAspectFlags aspect = 0;
+  if (is_depth_format || is_stencil_format) {
+    if (is_depth_format) {
+      aspect |= VK_IMAGE_ASPECT_DEPTH_BIT;
+    } else if (is_stencil_format) {
+      aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
+    }
+  } else {
+    aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+  }
   if (cached == VK_NULL_HANDLE) {
     cached = create_image_view(
       ctx,
       format,
-      VK_IMAGE_ASPECT_COLOR_BIT,
+      aspect,
       std::format(
         "ImageView::Framebuffer_{}_{}_::{}", level, layer, debug_name),
       1);

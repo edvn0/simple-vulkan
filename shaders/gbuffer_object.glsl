@@ -1,49 +1,70 @@
 #pragma stage : vertex
 
-#include <deferred_common.glsl>
+#include <ubo.glsl>
 
-layout(location = 0) in vec3 v_pos; // RGB32
-layout(location = 1) in vec3 v_normals; // A2RGB10
+layout(location = 0) in vec3 v_pos;
+layout(location = 1) in vec3 v_normals;
 layout(location = 2) in vec2 v_uvs;
 
-layout(location = 0) out VertexOut v_out;
+layout(location = 0) out vec3 out_world_position;
+layout(location = 1) out vec3 out_world_normals;
+layout(location = 2) out vec2 out_uvs;
 
-struct UBO
+layout(push_constant) uniform PC
 {
-  mat4 view;
-  mat4 projection;
-  mat4 view_proj;
-  mat4 inverse_view;
-  mat4 inverse_projection;
-  mat4 inverse_view_proj;
-};
-
-layout(buffer_reference, std430) buffer readonly UBOBuffer
-{
-  UBOBuffer ubo;
-};
-
-layout(push_constant) uniform PC{
   mat4 model;
-  UBOBuffer buffer;
-};
+  UboRef ubo;
+  uint material_index;
+  uint _pad;
+}
+pc;
 
 void
 main()
 {
-  VertexOut vertex_out = {};
-
-  vec4 wp = model * vec4(v_pos, 1.0);
-
-  vertex_out.world_position = wp.xyz;
-  vertex_out.world_normals = (transpose(inverse(model)) * vec4(v_normals)).xyz;
-  gl_Position = buffer.ubo.view_proj * wp;
+  vec4 wp = pc.model * vec4(v_pos, 1.0);
+  out_world_position = wp.xyz;
+  out_world_normals =
+    normalize((transpose(inverse(pc.model)) * vec4(v_normals, 0.0)).xyz);
+  out_uvs = v_uvs;
+  gl_Position = pc.ubo.view_proj * wp;
 }
 
 #pragma stage : fragment
 
-#include <deferred_common.glsl>
+#include <ubo.glsl>
 
-layout(location = 0) in VertexOut v_in;
+layout(location = 0) in vec3 out_world_position;
+layout(location = 1) in vec3 out_world_normals;
+layout(location = 2) in vec2 out_uvs;
 
-layout(location = 0)
+layout(location = 0) out uint out_material_id_bits;   // bind to R_F32
+layout(location = 1) out vec4 out_oct_normals_extras; // bind to A2R10G10B10_UN
+layout(location = 2) out vec2 out_texture_coords;     // bind to RGF16
+
+layout(push_constant) uniform PC
+{
+  mat4 model;
+  UboRef ubo;
+  uint material_index;
+  uint _pad;
+}
+pc;
+
+vec2
+encode_oct(vec3 n)
+{
+  n = normalize(n);
+  n /= (abs(n.x) + abs(n.y) + abs(n.z));
+  vec2 e = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * sign(n.xy);
+  return e * 0.5 + 0.5;
+}
+
+void
+main()
+{
+  vec2 oct = encode_oct(out_world_normals);
+  out_material_id_bits = pc.material_index;
+  out_oct_normals_extras = vec4(oct, 0.0, 1.0);
+  out_texture_coords = out_uvs;
+}

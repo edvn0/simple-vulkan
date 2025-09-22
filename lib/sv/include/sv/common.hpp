@@ -609,7 +609,6 @@ struct Framebuffer final
       : texture(tex)
       , resolve_texture(res)
     {
-    
     }
   };
 
@@ -832,5 +831,22 @@ set_name(const IContext& ctx,
 
 auto
 format_to_vk_format(const Format format) -> VkFormat;
+auto
+vk_format_to_format(VkFormat format) -> Format;
+auto
+format_is_depth(const VkFormat format) -> bool;
+auto
+format_is_stencil(const VkFormat format) -> bool;
+
+inline auto
+is_depth_or_stencil_format(const VkFormat format) -> bool
+{
+  return format_is_depth(format) || format_is_stencil(format);
+}
+inline auto
+is_depth_or_stencil_format(const Format format) -> bool
+{
+  return is_depth_or_stencil_format(format_to_vk_format(format));
+}
 
 }

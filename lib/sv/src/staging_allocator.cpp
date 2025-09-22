@@ -9,92 +9,6 @@
 
 namespace sv {
 
-namespace {
-auto
-vk_format_to_format(const VkFormat format) -> Format
-{
-  switch (format) {
-    case VK_FORMAT_UNDEFINED:
-      return Format::Invalid;
-    case VK_FORMAT_R8_UINT:
-      return Format::R_UI8;
-    case VK_FORMAT_R8_UNORM:
-      return Format::R_UN8;
-    case VK_FORMAT_R16_UINT:
-      return Format::R_UI16;
-    case VK_FORMAT_R32_UINT:
-      return Format::R_UI32;
-    case VK_FORMAT_R16_UNORM:
-      return Format::R_UN16;
-    case VK_FORMAT_R16_SFLOAT:
-      return Format::R_F16;
-    case VK_FORMAT_R32_SFLOAT:
-      return Format::R_F32;
-
-    case VK_FORMAT_R8G8_UNORM:
-      return Format::RG_UN8;
-    case VK_FORMAT_R16G16_UINT:
-      return Format::RG_UI16;
-    case VK_FORMAT_R32G32_UINT:
-      return Format::RG_UI32;
-    case VK_FORMAT_R16G16_UNORM:
-      return Format::RG_UN16;
-    case VK_FORMAT_R16G16_SFLOAT:
-      return Format::RG_F16;
-    case VK_FORMAT_R32G32_SFLOAT:
-      return Format::RG_F32;
-
-    case VK_FORMAT_R8G8B8A8_UNORM:
-      return Format::RGBA_UN8;
-    case VK_FORMAT_R32G32B32A32_UINT:
-      return Format::RGBA_UI32;
-    case VK_FORMAT_R16G16B16A16_SFLOAT:
-      return Format::RGBA_F16;
-    case VK_FORMAT_R16G16B16A16_UINT:
-      return Format::RGBA_UI16;
-    case VK_FORMAT_R32G32B32A32_SFLOAT:
-      return Format::RGBA_F32;
-    case VK_FORMAT_R8G8B8A8_SRGB:
-      return Format::RGBA_SRGB8;
-
-    case VK_FORMAT_B8G8R8A8_UNORM:
-      return Format::BGRA_UN8;
-    case VK_FORMAT_B8G8R8A8_SRGB:
-      return Format::BGRA_SRGB8;
-
-    case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
-      return Format::A2B10G10R10_UN;
-    case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
-      return Format::A2R10G10B10_UN;
-
-    case VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK:
-      return Format::ETC2_RGB8;
-    case VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK:
-      return Format::ETC2_SRGB8;
-    case VK_FORMAT_BC7_UNORM_BLOCK:
-      return Format::BC7_RGBA;
-
-    case VK_FORMAT_D16_UNORM:
-      return Format::Z_UN16;
-    case VK_FORMAT_X8_D24_UNORM_PACK32:
-      return Format::Z_UN24;
-    case VK_FORMAT_D32_SFLOAT:
-      return Format::Z_F32;
-    case VK_FORMAT_D24_UNORM_S8_UINT:
-      return Format::Z_UN24_S_UI8;
-    case VK_FORMAT_D32_SFLOAT_S8_UINT:
-      return Format::Z_F32_S_UI8;
-
-    case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
-      return Format::YUV_NV12;
-    case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
-      return Format::YUV_420p;
-    default:
-      return Format::Invalid;
-  }
-}
-}
-
 static constexpr VkDeviceSize max_staging_buffer_size =
   256ULL * 1024ULL * 1024ULL; // 256MB
 
@@ -656,28 +570,28 @@ StagingAllocator::upload_blob_with_regions(
 
 void
 StagingAllocator::upload(TextureHandle handle,
-    const VkRect2D& image_region,
-    std::uint32_t base_mip_level,
-    std::uint32_t mip_level_count,
-    std::uint32_t layer,
-    std::uint32_t num_layers,
-    VkFormat format,
-    const void* data,
-    std::uint32_t buffer_row_length)
+                         const VkRect2D& image_region,
+                         std::uint32_t base_mip_level,
+                         std::uint32_t mip_level_count,
+                         std::uint32_t layer,
+                         std::uint32_t num_layers,
+                         VkFormat format,
+                         const void* data,
+                         std::uint32_t buffer_row_length)
 {
   auto* img = context.get_texture_pool().get(handle);
   if (!img)
     return;
 
-upload(*img,
-        image_region,
-        base_mip_level,
-        mip_level_count,
-        layer,
-        num_layers,
-        format,
-        data,
-        buffer_row_length);
+  upload(*img,
+         image_region,
+         base_mip_level,
+         mip_level_count,
+         layer,
+         num_layers,
+         format,
+         data,
+         buffer_row_length);
 }
 
 void
@@ -979,13 +893,14 @@ StagingAllocator::ensure_size(std::uint32_t size_needed)
 
   auto name = std::format("Staging Buffer {}", staging_buffer_count++);
 
-  staging_buffer = VulkanDeviceBuffer::create(context,
-                                              {
-                                                .usage = BufferUsageBits::Destination | BufferUsageBits::Source,
-                                                .storage = StorageType::Device,
-                                                .size = staging_buffer_size,
-                                                .debug_name = "Staging buffer",
-                                              });
+  staging_buffer = VulkanDeviceBuffer::create(
+    context,
+    {
+      .usage = BufferUsageBits::Destination | BufferUsageBits::Source,
+      .storage = StorageType::Device,
+      .size = staging_buffer_size,
+      .debug_name = "Staging buffer",
+    });
 
   assert(!staging_buffer.empty());
 

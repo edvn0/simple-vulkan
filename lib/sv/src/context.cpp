@@ -1,5 +1,6 @@
 #include "sv/context.hpp"
 
+#include "sv/object_holder.hpp"
 #include "sv/tracing.hpp"
 
 #include "sv/bindless.hpp"
@@ -329,7 +330,7 @@ VulkanContext::initialise_tracing() -> void
   }
 
   std::vector<VkTimeDomainEXT> time_domains;
-  static constexpr auto has_calibrated_timestamps = false; // Read from somewhere
+  static constexpr auto has_calibrated_timestamps = true; // Read from somewhere
   if constexpr (has_calibrated_timestamps) {
     uint32_t time_domain_count = 0;
     get_calibrateable_time_domains(
@@ -365,11 +366,11 @@ VulkanContext::initialise_tracing() -> void
     };
     vkCreateCommandPool(
       device, &ciCommandPool, nullptr, &tracing->command_pool);
-    //lvk::setDebugObjectName(
-     // device,
-     // VK_OBJECT_TYPE_COMMAND_POOL,
-     // (uint64_t)tracing->command_pool,
-     // "Command Pool: VulkanContextImpl::command_pool");
+    // lvk::setDebugObjectName(
+    //  device,
+    //  VK_OBJECT_TYPE_COMMAND_POOL,
+    //  (uint64_t)tracing->command_pool,
+    //  "Command Pool: VulkanContextImpl::command_pool");
     const VkCommandBufferAllocateInfo aiCommandBuffer = {
       .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
       .commandPool = tracing->command_pool,
@@ -496,6 +497,8 @@ VulkanContext::create(const Window& window, const ContextConfiguration& conf)
   required_features.fragmentStoresAndAtomics = true;
   required_features.vertexPipelineStoresAndAtomics = true;
   required_features.shaderInt64 = true;
+  required_features.fillModeNonSolid = true;
+  required_features.wideLines = true;
 
   VkPhysicalDeviceVulkan11Features required_11_features{};
   required_11_features.shaderDrawParameters = true;
@@ -536,6 +539,7 @@ VulkanContext::create(const Window& window, const ContextConfiguration& conf)
   VkPhysicalDeviceVulkan13Features required_13_features{};
   required_13_features.dynamicRendering = true;
   required_13_features.synchronization2 = true;
+  required_13_features.shaderDemoteToHelperInvocation = true;
 
   VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT
     maintenance_one_features = {};
@@ -697,6 +701,35 @@ VulkanContext::VulkanContext(vkb::Instance&& i,
 }
 
 auto
+VulkanContext::recreate_texture(const Holder<TextureHandle>& tex,
+                                const TextureDescription& desc) -> void
+{
+  auto* slot = textures.get(*tex);
+  if (!slot)
+    return;
+
+  auto replacement = VulkanTextureND::build(*this, desc);
+  std::swap(*slot, replacement);
+  destroy_texture_resources(replacement);
+
+  needs_descriptor_update = true;
+
+  if (!desc.pixel_data.empty()) {
+    get_staging_allocator().upload(
+      *tex,
+      VkRect2D{ .offset = { 0, 0 },
+                .extent = { slot->extent.width, slot->extent.height } },
+      0,
+      slot->level_count,
+      0,
+      slot->layer_count,
+      slot->format,
+      desc.pixel_data.data(),
+      0);
+  }
+}
+
+auto
 VulkanContext::create_placeholder_resources() -> void
 {
   const uint32_t pixel = 0xFFFFFFFF;
@@ -745,32 +778,8 @@ VulkanContext::destroy(TextureHandle handle) -> void
   auto* tex = textures.get(handle);
   if (!tex)
     return;
-  defer_task([view = tex->image_view](IContext& ctx) {
-    vkDestroyImageView(ctx.get_device(), view, nullptr);
-  });
-  if (tex->storage_image_view) {
-    defer_task([view = tex->storage_image_view](IContext& ctx) {
-      vkDestroyImageView(ctx.get_device(), view, nullptr);
-    });
-  }
-  for (size_t i = 0; i != max_mip_levels_framebuffer; i++) {
-    for (size_t j = 0; j != max_layers_framebuffer; j++) {
-      VkImageView v = tex->framebuffer_image_views.at(i).at(j);
-      if (v) {
-        defer_task([imageView = v](IContext& ctx) {
-          vkDestroyImageView(ctx.get_device(), imageView, nullptr);
-        });
-      }
-    }
-  }
 
-  if (!tex->is_owning_image)
-    return;
-  if (tex->allocation_info.pMappedData)
-    vmaUnmapMemory(DeviceAllocator::the(), tex->allocation);
-  defer_task(([image = tex->image, allocation = tex->allocation](IContext&) {
-    vmaDestroyImage(DeviceAllocator::the(), image, allocation);
-  }));
+  destroy_texture_resources(*tex);
 };
 
 auto
@@ -946,6 +955,45 @@ VulkanContext::submit(ICommandBuffer& cmd, TextureHandle present)
   command_buffer = {};
 
   return handle;
+}
+
+auto
+VulkanContext::destroy_texture_resources(VulkanTextureND& tex) -> void
+{
+  defer_task([view = tex.image_view](IContext& ctx) {
+    if (view)
+      vkDestroyImageView(ctx.get_device(), view, nullptr);
+  });
+  if (tex.storage_image_view) {
+    defer_task([view = tex.storage_image_view](IContext& ctx) {
+      vkDestroyImageView(ctx.get_device(), view, nullptr);
+    });
+  }
+  for (size_t i = 0; i != max_mip_levels_framebuffer; ++i) {
+    for (size_t j = 0; j != max_layers_framebuffer; ++j) {
+      const auto v = tex.framebuffer_image_views.at(i).at(j);
+      if (v) {
+        defer_task([image_view = v](IContext& ctx) {
+          vkDestroyImageView(ctx.get_device(), image_view, nullptr);
+        });
+      }
+    }
+  }
+  if (!tex.is_owning_image)
+    return;
+  if (tex.allocation_info.pMappedData) {
+    vmaUnmapMemory(DeviceAllocator::the(), tex.allocation);
+  }
+  defer_task(([image = tex.image, allocation = tex.allocation](IContext&) {
+    if (image)
+      vmaDestroyImage(DeviceAllocator::the(), image, allocation);
+  }));
+
+  tex.image_view = VK_NULL_HANDLE;
+  tex.storage_image_view = VK_NULL_HANDLE;
+  tex.image = VK_NULL_HANDLE;
+  tex.allocation = {};
+  tex.allocation_info = {};
 }
 
 auto

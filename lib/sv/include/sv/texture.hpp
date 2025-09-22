@@ -81,8 +81,38 @@ struct VulkanTextureND
                                                 std::uint8_t layer)
     -> VkImageView;
 
+  auto swap(VulkanTextureND& other) noexcept -> void
+  {
+    using std::swap;
+    swap(image, other.image);
+    swap(image_view, other.image_view);
+    swap(storage_image_view, other.storage_image_view);
+    swap(allocation, other.allocation);
+    swap(allocation_info, other.allocation_info);
+    swap(extent, other.extent);
+    swap(type, other.type);
+    swap(format, other.format);
+    swap(samples, other.samples);
+    swap(level_count, other.level_count);
+    swap(layer_count, other.layer_count);
+    swap(usage_flags, other.usage_flags);
+    swap(format_properties, other.format_properties);
+    swap(is_depth_format, other.is_depth_format);
+    swap(is_stencil_format, other.is_stencil_format);
+    swap(is_owning_image, other.is_owning_image);
+    swap(debug_name, other.debug_name);
+    swap(framebuffer_image_views, other.framebuffer_image_views);
+  }
+
+  inline auto swap(VulkanTextureND& a, VulkanTextureND& b) noexcept -> void
+  {
+    a.swap(b);
+  }
+
   static auto create(IContext&, const TextureDescription&)
     -> Holder<TextureHandle>;
+
+  static auto build(IContext&, const TextureDescription&) -> VulkanTextureND;
 
   static auto create(IContext&, const VkSamplerCreateInfo&)
     -> Holder<SamplerHandle>;

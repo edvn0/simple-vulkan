@@ -183,6 +183,19 @@ public:
     return true;
   }
 
+  auto replace_in_place(IContext* ctx, handle_type h, TImpl&& v) -> bool
+  {
+    if (!is_valid(h))
+      return false;
+
+    // Is this correct?
+    destruction::context_destroy(ctx, h);
+
+    auto d = sparse_to_dense[h.index()];
+    dense_storage[d] = std::move(v);
+    return true;
+  }
+
   auto is_valid(handle_type h) const -> bool
   {
     auto i = h.index();
