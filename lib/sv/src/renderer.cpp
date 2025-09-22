@@ -3,10 +3,13 @@
 #include "sv/app.hpp"
 #include "sv/camera.hpp"
 #include "sv/common.hpp"
+#include "sv/context.hpp"
 #include "sv/object_handle.hpp"
 #include "sv/pipeline.hpp"
 #include "sv/shader/shader.hpp"
+#include "sv/tracing.hpp"
 #include "sv/transitions.hpp"
+#include "vulkan/vulkan_core.h"
 
 #include <sv/simple-mesh.hpp>
 
@@ -113,7 +116,7 @@ Renderer::Renderer(IContext& ctx,
   , impl(std::unique_ptr<Renderer::Impl, PimplDeleter>(new Renderer::Impl{},
                                                        PimplDeleter{}))
   , ubo{ ctx, 3 }
-
+  , shadow_ubo{ ctx, 3 }
 {
   impl->simple = simple::SimpleGeometryMesh::create(
     *context,
@@ -138,13 +141,14 @@ Renderer::Renderer(IContext& ctx,
       .shader = *deferred_mrt.shader,
       .color = { ColourAttachment{
         .format = Format::R_UI32,
-      }, ColourAttachment {
+      }, 
+      ColourAttachment {
           .format = Format::A2R10G10B10_UN,
-}
+          }
       ,
     ColourAttachment {
           .format = Format::RG_F16,
-}
+        }
       ,},
       .depth_format = Format::Z_F32_S_UI8,
       .debug_name = "MRT GBuffer"
@@ -189,6 +193,17 @@ Renderer::Renderer(IContext& ctx,
       .debug_name = "Grid Pipeline",
     });
 
+  directional_shadow.shader =
+    VulkanShader::create(*context, "shaders/directional_shadow.shader");
+  directional_shadow.pipeline =
+    VulkanGraphicsPipeline::create(*context,
+                                   {
+                                     .vertex_input = vertex_input,
+                                     .shader = *directional_shadow.shader,
+                                     .depth_format = Format::Z_F32_S_UI8,
+                                     .debug_name = "Cascade Shadow Pipeline",
+                                   });
+
   auto&& [w, h] = extent;
   resize(w, h);
 
@@ -200,6 +215,8 @@ Renderer::~Renderer() = default;
 auto
 Renderer::resize(const std::uint32_t width, const std::uint32_t height) -> void
 {
+  vkDeviceWaitIdle(context->get_device());
+
   const auto ensure = [this](auto& h, const TextureDescription& d) {
     if (h.valid())
       context->recreate_texture(h, d);
@@ -247,7 +264,47 @@ Renderer::resize(const std::uint32_t width, const std::uint32_t height) -> void
   };
   ensure(deferred_mrt.oct_normals_extras_tbd, normals_desc);
 
+  constexpr auto shadow_map_size = 1 << 12;
+  const auto shadow_map_desc = TextureDescription{
+    .format = Format::Z_F32_S_UI8,
+    .dimensions = { shadow_map_size, shadow_map_size },
+    .layer_count = 4,
+    .usage_bits = TextureUsageBits::Sampled | TextureUsageBits::Attachment,
+    .debug_name = "Directional_Shadow_Map_F32",
+  };
+  ensure(directional_shadow.texture, shadow_map_desc);
+
   deferred_extent = { width, height };
+
+  vkDeviceWaitIdle(context->get_device());
+}
+
+auto
+clear_depth_image(VkCommandBuffer cmd,
+                  VkImage image,
+                  VkImageLayout current_layout,
+                  float depth_value,
+                  uint32_t layer_count,
+                  uint32_t mip_levels = 1) -> void
+{
+  VkClearDepthStencilValue clear{};
+  clear.depth = depth_value;
+  clear.stencil = 0xFF;
+
+  VkImageSubresourceRange range{};
+  range.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+  range.baseMipLevel = 0;
+  range.levelCount = mip_levels;
+  range.baseArrayLayer = 0;
+  range.layerCount = layer_count;
+
+  vkCmdClearDepthStencilImage(
+    cmd,
+    image,
+    current_layout, // must be GENERAL or TRANSFER_DST_OPTIMAL
+    &clear,
+    1,
+    &range);
 }
 
 auto
@@ -260,7 +317,9 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
   // 3: Forward rendering into the resolved lighting
   // 4: Sample resolved lighting in the swapchain
 
+  std::array<glm::mat4, 2> models{};
   {
+    ZoneScopedNC("GBuffer", 0xFF00FF);
     const RenderPass gbuffer_render_pass{
       .color{
         RenderPass::AttachmentDescription{
@@ -314,6 +373,7 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
                               static_cast<float>(glfwGetTime()),
                               glm::vec3{ 0.0F, 1.0F, 1.0F });
 
+    models.at(0) = rotate;
     struct PC
     {
       glm::mat4 model;
@@ -324,12 +384,90 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
       .ubo_ref = ubo.get(current_frame),
       .material_index = 0,
     };
+    models.at(0) = pc.model;
+    buf.cmd_push_constants(pc, 0);
+    buf.cmd_draw_indexed(impl->simple.index_count, 1, 0, 0, 0);
+
+    pc.model =
+      glm::translate(glm::scale(glm::mat4{ 1.0F }, { 100.0F, 1.0F, 100.0F }),
+                     glm::vec3{ 0, 3, 0 });
+    models.at(1) = pc.model;
+
     buf.cmd_push_constants(pc, 0);
     buf.cmd_draw_indexed(impl->simple.index_count, 1, 0, 0, 0);
     buf.cmd_end_rendering();
   }
 
   {
+    struct PC
+    {
+      std::uint64_t ubo{};
+      glm::mat4 model{};
+    };
+
+    const RenderPass shadow_rp {
+        .depth = {
+          .load_op = LoadOp::Clear,
+          .store_op = StoreOp::Store,
+          .layer  =1,
+          .clear_depth = 0.0F,
+        },
+    };
+    const Framebuffer shadow_fb{
+      .depth_stencil =
+        Framebuffer::AttachmentDescription{
+          *directional_shadow.texture,
+        },
+    };
+    ImageTransition::transition_layout(
+      buf.get_command_buffer(),
+      context->get_texture_pool().get(*directional_shadow.texture)->image,
+      VK_IMAGE_LAYOUT_UNDEFINED,
+      VK_IMAGE_LAYOUT_GENERAL,
+      VkImageSubresourceRange{
+        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
+        .baseMipLevel = 0,
+        .levelCount = VK_REMAINING_MIP_LEVELS,
+        .baseArrayLayer = 0,
+        .layerCount = VK_REMAINING_ARRAY_LAYERS,
+      });
+    clear_depth_image(
+      buf.get_command_buffer(),
+      context->get_texture_pool().get(*directional_shadow.texture)->image,
+      VK_IMAGE_LAYOUT_GENERAL,
+      0.0F,
+      context->get_texture_pool()
+        .get(*directional_shadow.texture)
+        ->layer_count);
+    buf.cmd_begin_rendering(shadow_rp, shadow_fb, {});
+
+    {
+      buf.cmd_bind_graphics_pipeline(*directional_shadow.pipeline);
+      buf.cmd_bind_depth_state({
+        .compare_operation = CompareOp::Greater,
+        .is_depth_write_enabled = true,
+      });
+      buf.cmd_bind_vertex_buffer(0, *impl->simple.vertex_buffer, 0);
+      buf.cmd_bind_index_buffer(
+        *impl->simple.index_buffer, IndexFormat::UI32, 0);
+
+      PC pc{
+        .ubo = shadow_ubo.get(current_frame),
+        .model = models.at(0),
+      };
+      buf.cmd_push_constants(pc, 0);
+      buf.cmd_draw_indexed(impl->simple.index_count, 1, 0, 0, 0);
+
+      pc.model = models.at(1);
+      buf.cmd_push_constants(pc, 0);
+      buf.cmd_draw_indexed(impl->simple.index_count, 1, 0, 0, 0);
+    }
+
+    buf.cmd_end_rendering();
+  }
+
+  {
+    ZoneScopedNC("GBuffer Resolve", 0x00FFFF);
     buf.cmd_begin_rendering(
       { .color = { RenderPass::AttachmentDescription{
           .load_op = LoadOp::Clear,
@@ -345,12 +483,16 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
       std::uint32_t normals_tex;
       std::uint32_t depth_tex;
       std::uint32_t material_tex;
+      std::uint32_t uvs_tex;
       std::uint32_t sampler_id;
+      std::uint64_t ubo;
     } pc{
       deferred_mrt.oct_normals_extras_tbd.index(),
       deferred_mrt.depth_32.index(),
       deferred_mrt.material_id.index(),
+      deferred_mrt.uvs.index(),
       0,
+      ubo.get(current_frame),
     };
     buf.cmd_bind_depth_state({
       .compare_operation = CompareOp::AlwaysPass,
@@ -361,6 +503,7 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
   }
 
   {
+    ZoneScopedNC("Forward pass", 0x22FF22);
     RenderPass forward_pass{
     .color = {
         RenderPass::AttachmentDescription{
@@ -501,6 +644,51 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
   current_frame++;
 }
 
+static auto
+orthonormal_basis(const glm::vec3& d) -> std::pair<glm::vec3, glm::vec3>
+{
+  const glm::vec3 up =
+    std::abs(d.y) > 0.99f ? glm::vec3{ 0, 0, 1 } : glm::vec3{ 0, 1, 0 };
+  const glm::vec3 right = glm::normalize(glm::cross(up, d));
+  const glm::vec3 new_up = glm::normalize(glm::cross(d, right));
+  return { right, new_up };
+}
+
+auto
+Renderer::build_centered_cascades(const glm::vec3& light_dir,
+                                  const ShadowSplits& splits,
+                                  float z_near,
+                                  float z_far) -> ShadowUBOData
+{
+  ShadowUBOData out{};
+  out.cascade_count = splits.count;
+
+  const glm::vec3 dir = glm::normalize(light_dir);
+  auto [right, up] = orthonormal_basis(dir);
+  const glm::vec3 center{ 0.f };
+  const float depth = 0.5f * (z_near + z_far);
+  const glm::vec3 eye = center - dir * depth;
+
+  const glm::mat4 view = glm::lookAt(eye, center, up);
+
+  for (std::uint32_t i = 0; i < splits.count; ++i) {
+    const float e = splits.half_extents[i];
+    const glm::mat4 proj = glm::ortho(-e, e, -e, e, 0.0f, z_near + z_far);
+    out.cascades[i].view = view;
+    out.cascades[i].proj = proj;
+    out.cascades[i].vp = proj * view;
+  }
+  return out;
+}
+
+auto
+Renderer::update_shadow_ubo_layers(const glm::vec3& light_dir) -> void
+{
+  ShadowUBOData s =
+    build_centered_cascades(light_dir, shadow_splits, shadow_near, shadow_far);
+  shadow_ubo.upload(current_frame, s);
+}
+
 auto
 Renderer::begin_frame(const Camera& camera) -> void
 {
@@ -511,14 +699,16 @@ Renderer::begin_frame(const Camera& camera) -> void
   dir.z = glm::cos(rad_phi) * glm::sin(rad_theta);
   dir = -glm::normalize(dir);
 
-  const auto aspect = static_cast<float>(std::get<0>(deferred_extent)) /
-                      static_cast<float>(std::get<1>(deferred_extent));
+  auto&& [w, h] = deferred_extent;
+  const auto aspect = static_cast<float>(w) / static_cast<float>(h);
   const auto proj =
     glm::perspective(glm::radians(70.0F), aspect, 0.01F, 1000.0F);
   auto constructed_ubo = this->create_ubo(camera.get_view_matrix(), proj);
   constructed_ubo.light_direction = glm::vec4(dir, 0.0f);
   constructed_ubo.camera_position = glm::vec4(camera.get_position(), 1.0F);
   ubo.upload(current_frame, constructed_ubo);
+
+  update_shadow_ubo_layers(dir);
 
   canvas_3d.set_mvp(proj * camera.get_view_matrix());
 }

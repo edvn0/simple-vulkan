@@ -90,12 +90,12 @@ public:
   [[nodiscard]] auto should_close() const -> bool;
   auto poll_events() const -> void;
 
-  auto get_window() const { return *window; }
+  auto get_window() const -> const auto& { return *window; }
+  auto get_window() -> auto& { return *window; }
 
   static auto create(const ApplicationConfiguration&)
     -> std::expected<App, InitialisationError>;
 
-  auto attach_context(IContext&, IRenderer&) -> bool;
   auto detach_context() -> void;
 };
 

@@ -5,7 +5,7 @@ set_target_properties(sv PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(sv PUBLIC cxx_std_23)
 target_include_directories(sv
   PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/sv/include
   PRIVATE
     ${vulkan_headers_SOURCE_DIR}/include
 )
@@ -15,6 +15,7 @@ set(simple_vulkan_compile_defs
   GLM_FORCE_DEPTH_ZERO_TO_ONE
   GLM_FORCE_LEFT_HANDED
   HAS_TRACY_TRACING
+  TRACY_ENABLE
 )
 if(HAS_STD_EXPECTED)
   list(APPEND simple_vulkan_compile_defs HAS_STD_EXPECTED)
@@ -32,6 +33,7 @@ target_link_libraries(sv
     glm::glm
     GPUOpen::VulkanMemoryAllocator
     imgui_glfw
+    tinyobjloader_double
 )
 
 function(enable_sane_warnings target)

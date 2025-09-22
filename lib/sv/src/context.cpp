@@ -1570,6 +1570,7 @@ VulkanSwapchain::resize(std::uint32_t width, std::uint32_t height) -> void
 auto
 VulkanSwapchain::present(VkSemaphore wait_semaphore) -> bool
 {
+  FrameMark;
   const VkSwapchainPresentFenceInfoEXT fence_info = {
     .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT,
     .pNext = nullptr,

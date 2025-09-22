@@ -13,7 +13,8 @@ public:
   explicit CommandBuffer(IContext&);
   ~CommandBuffer() override;
 
-  [[nodiscard]] auto get_command_buffer() const -> VkCommandBuffer override {
+  [[nodiscard]] auto get_command_buffer() const -> VkCommandBuffer override
+  {
     return wrapper->command_buffer;
   }
 

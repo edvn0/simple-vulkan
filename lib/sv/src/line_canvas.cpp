@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <glm/ext/matrix_transform.hpp>
+#include <tracy/Tracy.hpp>
 
 #include "sv/buffer.hpp"
 #include "sv/common.hpp"
@@ -161,6 +162,8 @@ LineCanvas3D::render(IContext& ctx,
 {
   if (lines.empty())
     return;
+
+  ZoneScopedNC("Line Canvas", 0xFFFF22);
 
   const auto line_span = std::span(lines);
   const auto required_size = static_cast<std::uint32_t>(line_span.size_bytes());

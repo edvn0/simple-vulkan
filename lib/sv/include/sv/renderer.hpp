@@ -7,6 +7,7 @@
 #include "sv/common.hpp"
 #include "sv/imgui_renderer.hpp"
 #include "sv/line_canvas.hpp"
+#include "sv/object_handle.hpp"
 #include "sv/object_holder.hpp"
 
 #include <vector>
@@ -59,6 +60,24 @@ public:
   }
 };
 
+struct ShadowCascadeData
+{
+  glm::mat4 view{};
+  glm::mat4 proj{};
+  glm::mat4 vp{};
+};
+struct ShadowUBOData
+{
+  std::array<ShadowCascadeData, 8> cascades{};
+  std::uint32_t cascade_count{};
+  std::uint32_t pad0{}, pad1{}, pad2{};
+};
+struct ShadowSplits
+{
+  std::array<float, 8> half_extents{};
+  std::uint32_t count{};
+};
+
 struct IRenderer
 {
   virtual ~IRenderer() = default;
@@ -93,6 +112,12 @@ private:
     Holder<ShaderModuleHandle> shader;
     Holder<GraphicsPipelineHandle> pipeline;
   };
+  struct DirectionalShadow
+  {
+    Holder<TextureHandle> texture{};
+    Holder<ShaderModuleHandle> shader{};
+    Holder<GraphicsPipelineHandle> pipeline{};
+  };
 
   struct Grid
   {
@@ -105,6 +130,7 @@ private:
 
   std::tuple<std::uint32_t, std::uint32_t> deferred_extent{};
   GBuffer deferred_mrt;                 // Phase 1
+  DirectionalShadow directional_shadow; // Phase 1*
   GBufferLighting deferred_hdr_gbuffer; // Phase 2
   Grid grid;                            // Phase 3
   LineCanvas3D canvas_3d;               // Phase 3
@@ -136,6 +162,23 @@ private:
       .inverse_view_proj = glm::inverse(view) * glm::inverse(proj),
     };
   }
+
+  ShadowSplits shadow_splits{
+    .half_extents = { 10.f, 25.f, 60.f, 140.f },
+    .count = 4,
+  };
+  float shadow_near = 1.f;
+  float shadow_far = 300.f;
+  FrameCountBuffer<ShadowUBOData> shadow_ubo;
+  auto update_shadow_ubo_layers(const glm::vec3&) -> void;
+  auto build_centered_cascades(const glm::vec3& light_dir,
+                               const ShadowSplits& splits,
+                               float z_near,
+                               float z_far) -> ShadowUBOData;
+  auto build_single_cascade(const glm::vec3& light_dir,
+                            float half_extent,
+                            float z_near,
+                            float z_far) -> ShadowUBOData;
 
   std::uint32_t current_frame{ 0 };
 

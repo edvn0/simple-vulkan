@@ -187,7 +187,6 @@ public:
                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
   }
 
-
   static auto undefined_to_transfer_dst(VkCommandBuffer cmd_buffer,
                                         VkImage image) -> void
   {
@@ -249,7 +248,6 @@ public:
 
     vkCmdPipelineBarrier2(cmd_buffer, &dependency_info);
   }
-
 
   static auto present_to_color_attachment(VkCommandBuffer cmd_buffer,
                                           VkImage image) -> void

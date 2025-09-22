@@ -52,7 +52,7 @@ struct App::TrackingAllocator
     std::atomic<size_t> bytes_current{ 0 };
     std::atomic<size_t> bytes_peak{ 0 };
     std::atomic<size_t> bytes_total{ 0 };
-    std::ostream* out{ &std::cerr };
+    std::ostream* out{ nullptr };
     std::string tag{ "GLFW" };
     bool verbose{ false };
   };
@@ -78,7 +78,7 @@ struct App::TrackingAllocator
     s->bytes_current += sz;
     s->bytes_total += sz;
     s->bytes_peak = std::max(s->bytes_peak.load(), s->bytes_current.load());
-    if (s->verbose)
+    if (s->verbose && s->out)
       (*s->out) << '[' << s->tag << "] alloc   " << p << ' ' << sz << '\n';
     return p;
   }
@@ -114,7 +114,7 @@ struct App::TrackingAllocator
       s->bytes_total += (sz - old_sz);
     s->bytes_peak = std::max(s->bytes_peak.load(), s->bytes_current.load());
     s->realloc_count++;
-    if (s->verbose)
+    if (s->verbose && s->out)
       (*s->out) << '[' << s->tag << "] realloc " << block << " -> " << p2 << ' '
                 << sz << '\n';
     return p2;
@@ -134,7 +134,7 @@ struct App::TrackingAllocator
         s->bytes_current -= sz;
       }
       s->free_count++;
-      if (s->verbose)
+      if (s->verbose && s->out)
         (*s->out) << '[' << s->tag << "] free    " << block << ' ' << sz
                   << '\n';
     }
@@ -160,15 +160,17 @@ struct App::TrackingAllocator
   auto dump(std::ostream* os = nullptr) const -> void
   {
     auto* out = os ? os : state->out;
-    std::scoped_lock lk(state->m);
-    (*out) << '[' << state->tag << "] "
-           << "allocs=" << state->alloc_count.load()
-           << " reallocs=" << state->realloc_count.load()
-           << " frees=" << state->free_count.load()
-           << " live_bytes=" << state->bytes_current.load()
-           << " peak_bytes=" << state->bytes_peak.load()
-           << " total_bytes=" << state->bytes_total.load()
-           << " leaks=" << state->sizes.size() << '\n';
+    if (out) {
+      std::scoped_lock lk(state->m);
+      (*out) << '[' << state->tag << "] "
+             << "allocs=" << state->alloc_count.load()
+             << " reallocs=" << state->realloc_count.load()
+             << " frees=" << state->free_count.load()
+             << " live_bytes=" << state->bytes_current.load()
+             << " peak_bytes=" << state->bytes_peak.load()
+             << " total_bytes=" << state->bytes_total.load()
+             << " leaks=" << state->sizes.size() << '\n';
+    }
   }
 };
 
@@ -238,7 +240,9 @@ App::create(const ApplicationConfiguration& config)
     config.extent_if_not_fullscreen.value_or(std::make_tuple(1280, 1024));
 
   tmp.allocator->set_verbose(true);
+#ifdef USE_CERR
   tmp.allocator->set_stream(std::cerr);
+#endif
   tmp.allocator->set_tag("GLFW");
   tmp.window->width = ww;
   tmp.window->height = hh;
@@ -269,30 +273,6 @@ App::create(const ApplicationConfiguration& config)
 
   return std::expected<App, InitialisationError>{ std::in_place,
                                                   std::move(tmp) };
-}
-
-auto
-App::attach_context(IContext& ctx, IRenderer& r) -> bool
-{
-  context = &ctx;
-  renderer = &r;
-
-  glfwSetWindowUserPointer(static_cast<GLFWwindow*>(window->opaque_handle),
-                           this);
-
-  glfwSetFramebufferSizeCallback(
-    static_cast<GLFWwindow*>(window->opaque_handle),
-    [](GLFWwindow* win, int w, int h) -> void {
-      auto* app = static_cast<App*>(glfwGetWindowUserPointer(win));
-
-      auto* context = static_cast<VulkanContext*>(app->context);
-      app->window->width = static_cast<std::uint32_t>(w);
-      app->window->height = static_cast<std::uint32_t>(h);
-
-      context->resize_next_frame();
-    });
-
-  return true;
 }
 
 auto

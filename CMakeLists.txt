@@ -101,9 +101,17 @@ FetchContent_MakeAvailable(spirv-reflect)
 FetchContent_Declare(
   tracy
   GIT_REPOSITORY https://github.com/wolfpld/tracy.git
-  GIT_TAG v0.12.2
+  GIT_TAG master
 )
 FetchContent_MakeAvailable(tracy)
+
+FetchContent_Declare(
+  tinyobj
+  GIT_REPOSITORY https://github.com/tinyobjloader/tinyobjloader.git
+  GIT_TAG release
+)
+set(TINYOBJLOADER_USE_DOUBLE ON CACHE INTERNAL "")
+FetchContent_MakeAvailable(tinyobj)
 
 find_package(Vulkan REQUIRED)
 

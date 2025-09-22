@@ -5,14 +5,15 @@
 #include "sv/common.hpp"
 #include "sv/object_handle.hpp"
 
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
+
 #define GLM_ENABLE_EXPERIMENTAL
-#include <cmath>
-#include <glm/gtc/constants.hpp>
 #include <glm/gtx/norm.hpp>
 
 namespace simple {
 
-    using namespace sv;
+using namespace sv;
 
 struct VertexPNV2
 {
@@ -31,127 +32,6 @@ static auto
 as_bytes(const std::vector<std::uint32_t>& v) -> std::span<const std::byte>
 {
   return std::as_bytes(std::span{ v });
-}
-
-static auto
-generate_cube(const glm::vec3 he)
-  -> std::pair<std::vector<VertexPNV2>, std::vector<std::uint32_t>>
-{
-  const glm::vec3 p[8] = {
-    { -he.x, -he.y, -he.z }, { he.x, -he.y, -he.z }, { he.x, he.y, -he.z },
-    { -he.x, he.y, -he.z },  { -he.x, -he.y, he.z }, { he.x, -he.y, he.z },
-    { he.x, he.y, he.z },    { -he.x, he.y, he.z },
-  };
-
-  struct F
-  {
-    int i0, i1, i2, i3;
-    glm::vec3 n;
-  } faces[6] = {
-    { 0, 1, 2, 3, { 0, 0, -1 } }, { 4, 5, 6, 7, { 0, 0, 1 } },
-    { 0, 4, 5, 1, { 0, -1, 0 } }, { 3, 2, 6, 7, { 0, 1, 0 } },
-    { 1, 5, 6, 2, { 1, 0, 0 } },  { 0, 3, 7, 4, { -1, 0, 0 } },
-  };
-
-  std::vector<VertexPNV2> v;
-  v.reserve(24);
-  std::vector<std::uint32_t> i;
-  i.reserve(36);
-
-  for (int f = 0; f < 6; ++f) {
-    const glm::vec2 uvs[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
-    const auto base = static_cast<std::uint32_t>(v.size());
-    const int vids[4] = { faces[f].i0, faces[f].i1, faces[f].i2, faces[f].i3 };
-    for (int k = 0; k < 4; ++k)
-      v.push_back(VertexPNV2{ p[vids[k]], faces[f].n, uvs[k] });
-    i.insert(i.end(),
-             { base + 0, base + 1, base + 2, base + 0, base + 2, base + 3 });
-  }
-  return { std::move(v), std::move(i) };
-}
-
-static auto
-generate_capsule(float r,
-                 float half_len,
-                 std::uint32_t slices,
-                 std::uint32_t stacks)
-  -> std::pair<std::vector<VertexPNV2>, std::vector<std::uint32_t>>
-{
-  slices = std::max<std::uint32_t>(3, slices);
-  stacks = std::max<std::uint32_t>(2, stacks);
-  const std::uint32_t cyl_segments = std::max<std::uint32_t>(1, stacks);
-
-  struct Ring
-  {
-    float y;
-    float ring_r;
-    enum class Zone
-    {
-      Bottom,
-      Cyl,
-      Top
-    } zone;
-  };
-  std::vector<Ring> rings;
-  rings.reserve(2 * stacks + cyl_segments + 1);
-
-  for (std::uint32_t i = 0; i <= stacks; ++i) {
-    float t = float(i) / float(stacks);
-    float theta = -glm::half_pi<float>() + t * glm::half_pi<float>();
-    rings.push_back({ -half_len + r * std::sin(theta),
-                      r * std::cos(theta),
-                      Ring::Zone::Bottom });
-  }
-  for (std::uint32_t j = 1; j < cyl_segments; ++j) {
-    float t = float(j) / float(cyl_segments);
-    rings.push_back({ -half_len + 2.f * half_len * t, r, Ring::Zone::Cyl });
-  }
-  for (std::uint32_t i = 1; i <= stacks; ++i) {
-    float t = float(i) / float(stacks);
-    float theta = t * glm::half_pi<float>();
-    rings.push_back(
-      { half_len + r * std::sin(theta), r * std::cos(theta), Ring::Zone::Top });
-  }
-
-  const std::uint32_t ring_count = static_cast<std::uint32_t>(rings.size());
-  std::vector<VertexPNV2> v;
-  v.reserve(ring_count * slices);
-  std::vector<std::uint32_t> idx;
-  idx.reserve((ring_count - 1) * slices * 6);
-
-  for (std::uint32_t ri = 0; ri < ring_count; ++ri) {
-    const auto& ring = rings[ri];
-    for (std::uint32_t s = 0; s < slices; ++s) {
-      float u = float(s) / float(slices);
-      float phi = u * glm::two_pi<float>();
-      float cx = std::cos(phi), sz = std::sin(phi);
-      glm::vec3 pos{ ring.ring_r * cx, ring.y, ring.ring_r * sz };
-      glm::vec3 n;
-      if (ring.zone == Ring::Zone::Cyl)
-        n = glm::normalize(glm::vec3{ cx, 0.f, sz });
-      else {
-        float cy = (ring.zone == Ring::Zone::Bottom) ? -half_len : +half_len;
-        n = glm::normalize(glm::vec3{ pos.x, pos.y - cy, pos.z });
-      }
-      float vcoord = float(ri) / float(ring_count - 1);
-      v.push_back(VertexPNV2{ pos, n, glm::vec2{ u, vcoord } });
-    }
-  }
-
-  auto vert_index = [slices](std::uint32_t r, std::uint32_t s) {
-    return r * slices + (s % slices);
-  };
-  for (std::uint32_t current_ring = 0; current_ring < ring_count - 1; ++current_ring) {
-    for (std::uint32_t s = 0; s < slices; ++s) {
-      auto a = vert_index(current_ring, s);
-      auto b = vert_index(current_ring, s + 1);
-      auto c = vert_index(current_ring + 1, s + 1);
-      auto d = vert_index(current_ring + 1, s);
-      idx.insert(idx.end(), { a, b, c, a, c, d });
-    }
-  }
-
-  return { std::move(v), std::move(idx) };
 }
 
 static auto
@@ -182,6 +62,115 @@ make_buffers(IContext& ctx,
   return { std::move(vb), std::move(ib) };
 }
 
+static auto
+compute_face_normal(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
+  -> glm::vec3
+{
+  auto n = glm::cross(b - a, c - a);
+  return glm::length2(n) > 0.f ? glm::normalize(n) : glm::vec3{ 0.f };
+}
+
+static auto
+load_obj(std::string_view obj_path)
+  -> std::pair<std::vector<VertexPNV2>, std::vector<std::uint32_t>>
+{
+  tinyobj::attrib_t attrib;
+  std::vector<tinyobj::shape_t> shapes;
+  std::vector<tinyobj::material_t> materials;
+  std::string warn, err;
+
+  tinyobj::ObjReaderConfig cfg{};
+  cfg.triangulate = true;
+  cfg.triangulation_method = "earcut";
+  cfg.vertex_color = false;
+
+  tinyobj::ObjReader reader{};
+
+  if (!reader.ParseFromFile(std::string{ obj_path }, cfg))
+    throw std::runtime_error("tinyobjloader: " + warn + err);
+
+  attrib = reader.GetAttrib();
+  shapes = reader.GetShapes();
+  materials = reader.GetMaterials();
+  warn = reader.Warning();
+  err = reader.Error();
+
+  std::vector<VertexPNV2> vertices;
+  std::vector<std::uint32_t> indices;
+  vertices.reserve(1024);
+  indices.reserve(1024);
+
+  for (const auto& s : shapes) {
+    const auto& mesh = s.mesh;
+    for (size_t f = 0; f < mesh.indices.size(); f += 3) {
+      VertexPNV2 tri[3]{};
+      for (int k = 0; k < 3; ++k) {
+        const auto& idx = mesh.indices[f + k];
+
+        if (idx.vertex_index < 0)
+          throw std::runtime_error("OBJ has invalid vertex index");
+        const int vi = 3 * idx.vertex_index;
+        tri[k].position = {
+          attrib.vertices[vi + 0],
+          attrib.vertices[vi + 1],
+          attrib.vertices[vi + 2],
+        };
+
+        if (idx.normal_index >= 0) {
+          const int ni = 3 * idx.normal_index;
+          tri[k].normal = {
+            attrib.normals[ni + 0],
+            attrib.normals[ni + 1],
+            attrib.normals[ni + 2],
+          };
+        } else {
+          tri[k].normal = { 0.f, 0.f, 0.f };
+        }
+
+        if (idx.texcoord_index >= 0) {
+          const int ti = 2 * idx.texcoord_index;
+          tri[k].uv = { attrib.texcoords[ti + 0], attrib.texcoords[ti + 1] };
+        } else {
+          tri[k].uv = { 0.f, 0.f };
+        }
+      }
+
+      if (tri[0].normal == glm::vec3{ 0.f } &&
+          tri[1].normal == glm::vec3{ 0.f } &&
+          tri[2].normal == glm::vec3{ 0.f }) {
+        const auto n = compute_face_normal(
+          tri[0].position, tri[1].position, tri[2].position);
+        tri[0].normal = tri[1].normal = tri[2].normal = n;
+      }
+
+      const auto base = static_cast<std::uint32_t>(vertices.size());
+      vertices.push_back(tri[0]);
+      vertices.push_back(tri[1]);
+      vertices.push_back(tri[2]);
+      indices.push_back(base + 0);
+      indices.push_back(base + 1);
+      indices.push_back(base + 2);
+    }
+  }
+
+  return { std::move(vertices), std::move(indices) };
+}
+
+auto kind_to_path =
+  [](const SimpleGeometryParams::Kind kind) -> std::string_view {
+  switch (kind) {
+    using Kind = SimpleGeometryParams::Kind;
+    case Kind::Cube: {
+      return "meshes/cube.obj";
+    };
+    case Kind::Capsule: {
+      return "meshes/capsule.obj";
+    }
+  };
+
+  return "meshes/cube.obj";
+};
+
 auto
 SimpleGeometryMesh::create(IContext& ctx, const SimpleGeometryParams& p)
   -> SimpleGeometryMesh
@@ -189,12 +178,11 @@ SimpleGeometryMesh::create(IContext& ctx, const SimpleGeometryParams& p)
   std::vector<VertexPNV2> vertices;
   std::vector<std::uint32_t> indices;
 
-  if (p.kind == SimpleGeometryParams::Kind::Cube) {
-    std::tie(vertices, indices) = generate_cube(p.half_extents);
-  } else {
-    std::tie(vertices, indices) =
-      generate_capsule(p.radius, p.half_length, p.slices, p.stacks);
-  }
+  auto obj_path = kind_to_path(p.kind);
+  auto [v, i] = load_obj(
+    obj_path); // expects SimpleGeometryParams{ obj_path, debug_name, ... }
+  vertices = std::move(v);
+  indices = std::move(i);
 
   auto [vb, ib] = make_buffers(ctx, p.debug_name, vertices, indices);
 
@@ -206,4 +194,4 @@ SimpleGeometryMesh::create(IContext& ctx, const SimpleGeometryParams& p)
   return m;
 }
 
-} // namespace sv
+} // namespace simple

@@ -193,6 +193,8 @@ class VulkanContext final : public IContext
   std::unique_ptr<TracingImpl, PimplDeleter> tracing;
   auto initialise_tracing() -> void;
 
+  friend class Renderer;
+
   std::deque<std::function<void(IContext&)>> delete_queue;
   std::deque<std::function<void(IContext&)>> pre_frame_queue;
 
@@ -307,13 +309,15 @@ public:
     return command_buffer;
   }
 
-  auto recreate_swapchain(std::uint32_t w, std::uint32_t h) -> bool override
+  auto recreate_swapchain(std::uint32_t w, std::uint32_t h)
+    -> SwapchainRecreateResult override
   {
     if (!should_resize)
-      return false;
-    auto could = initialise_swapchain(w, h);
-    should_resize = !could;
-    return could;
+      return SwapchainRecreateResult::NoOp;
+    const bool ok = initialise_swapchain(w, h);
+    should_resize = !ok;
+    return ok ? SwapchainRecreateResult::Success
+              : SwapchainRecreateResult::Retry;
   }
   auto get_current_swapchain_texture() -> TextureHandle override;
 

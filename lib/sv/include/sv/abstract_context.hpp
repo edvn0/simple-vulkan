@@ -58,7 +58,15 @@ struct IContext
   virtual auto get_sampler_pool() -> SamplerPool& = 0;
   virtual auto destroy(SamplerHandle) -> void = 0;
 
-  virtual auto recreate_swapchain(std::uint32_t, std::uint32_t) -> bool = 0;
+  enum class SwapchainRecreateResult : std::uint8_t
+  {
+    NoOp,
+    Success,
+    Retry,
+  };
+
+  virtual auto recreate_swapchain(std::uint32_t, std::uint32_t)
+    -> SwapchainRecreateResult = 0;
   virtual auto get_current_swapchain_texture() -> TextureHandle = 0;
   virtual auto acquire_command_buffer() -> ICommandBuffer& = 0;
   virtual auto submit(ICommandBuffer&, TextureHandle) -> SubmitHandle = 0;
