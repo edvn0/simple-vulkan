@@ -23,6 +23,10 @@ layout(push_constant) uniform pc_lighting
   uint material_tex;
   uint uvs_tex;
   uint sampler_id;
+
+  uint shadow_tex;
+  uint shadow_sampler_id;
+  uint shadow_cascade_count;
   UboRef ubo;
 }
 pc;
@@ -54,8 +58,12 @@ main()
   uint mat_id =
     floatBitsToUint(textureBindless2D(pc.material_tex, pc.sampler_id, v_uv).r);
 
+  float ref_depth = 0.5;
+  float shadow_depth =
+    textureBindless2D(pc.shadow_tex, pc.shadow_sampler_id, v_uv).r;
+
   vec3 n = decode_oct(ne.rg);
-  vec3 l = -normalize(pc.ubo.light_direction.xyz);
+  vec3 l = normalize(pc.ubo.light_direction.xyz);
 
   vec3 wpos = reconstruct_world_position(depth, v_uv);
   vec3 v = normalize(pc.ubo.camera_position.xyz - wpos);
@@ -74,7 +82,7 @@ main()
 
   vec3 light_color = vec3(0.9, 0.7, 0.1);
   vec3 ambient = ambient_strength * base;
-  vec3 diffuse = ndotl * base * light_color;
+  vec3 diffuse = shadow_depth * ndotl * base * light_color;
   vec3 specular = specular_intensity * pow(ndoth, shininess) * light_color;
 
   o_hdr = vec4(ambient + diffuse + specular, 1.0);

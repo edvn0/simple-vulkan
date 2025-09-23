@@ -471,7 +471,7 @@ run(std::span<const std::string_view> args)
   auto context = std::move(maybe_ctx.value());
   Renderer renderer{ *context, app.get_window().extent() };
   Camera camera(
-    std::make_unique<FirstPersonCameraBehaviour>(glm::vec3{ 0, 2.0F, -3.0F },
+    std::make_unique<FirstPersonCameraBehaviour>(glm::vec3{ 0, -6.0F, -3.0F },
                                                  glm::vec3{ 0, 0, 0.0F },
                                                  glm::vec3{ 0, 1, 0 }));
   sv::EventSystem::EventDispatcher event_dispatcher;
@@ -490,12 +490,13 @@ run(std::span<const std::string_view> args)
 
   double last_time = glfwGetTime();
   while (!app.should_close()) {
+    event_dispatcher.process_events();
+
     const double now = glfwGetTime();
     const double dt = now - last_time;
     last_time = now;
     camera_input->tick(dt);
 
-    event_dispatcher.process_events();
     auto sc_result = context->recreate_swapchain(app.get_window().width,
                                                  app.get_window().height);
 

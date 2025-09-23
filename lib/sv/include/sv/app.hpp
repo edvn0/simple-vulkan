@@ -34,7 +34,7 @@ struct ApplicationConfiguration
   bool enable_fullscreen_switching{ false };
   PresentMode mode{ PresentMode::FIFO };
   std::optional<std::tuple<std::uint32_t, std::uint32_t>>
-    extent_if_not_fullscreen{ std::make_tuple(1280, 1024) };
+    extent_if_not_fullscreen{ std::make_tuple(1280, 800) };
 };
 
 class App;
@@ -44,7 +44,7 @@ struct Window
     false
   }; // This is the immutable flag, from some config or alike.
   std::uint32_t width{ 1280 };
-  std::uint32_t height{ 1024 };
+  std::uint32_t height{ 800 };
   bool is_fullscreen{ fullscreen };
   App* owned_by{ nullptr };
   void* opaque_handle{ nullptr };

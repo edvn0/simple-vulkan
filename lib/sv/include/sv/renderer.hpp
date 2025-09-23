@@ -115,6 +115,7 @@ private:
   struct DirectionalShadow
   {
     Holder<TextureHandle> texture{};
+    Holder<SamplerHandle> sampler{};
     Holder<ShaderModuleHandle> shader{};
     Holder<GraphicsPipelineHandle> pipeline{};
   };

@@ -136,7 +136,9 @@ ImGuiRenderer::end_frame(ICommandBuffer& command_buffer)
   const float fb_width = dd->DisplaySize.x * dd->FramebufferScale.x;
   const float fb_height = dd->DisplaySize.y * dd->FramebufferScale.y;
 
-  command_buffer.cmd_bind_depth_state({});
+  command_buffer.cmd_bind_depth_state({
+    .is_depth_test_enabled = false,
+  });
   command_buffer.cmd_bind_viewport({
     .x = 0.0f,
     .y = 0.0f,

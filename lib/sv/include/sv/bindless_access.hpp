@@ -28,6 +28,7 @@ struct BindlessAccess
                                   std::function<void(IContext&)>&&) = delete;
   static auto process_pre_frame_task(Ctx&) = delete;
   static auto defer_task(Ctx&, std::function<void(IContext&)>&&) = delete;
+  static auto wait_for_latest(Ctx&) = delete;
 };
 
 }

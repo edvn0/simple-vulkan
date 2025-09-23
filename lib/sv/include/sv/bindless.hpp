@@ -3,7 +3,7 @@
 #include "common.hpp"
 #include "sv/bindless_access.hpp"
 #include "sv/texture.hpp"
-#include "vulkan/vulkan_core.h"
+#include "sv/tracing.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -147,9 +147,10 @@ public:
 
   static auto write_all(Ctx& ctx) -> void
   {
-    auto& pool = BindlessAccess<Ctx>::textures(ctx);
-    auto& samplers_pool = BindlessAccess<Ctx>::samplers(ctx);
-    auto& desc = BindlessAccess<Ctx>::descriptors(ctx);
+    using access = BindlessAccess<Ctx>;
+    auto& pool = access::textures(ctx);
+    auto& samplers_pool = access::samplers(ctx);
+    auto& desc = access::descriptors(ctx);
 
     const auto n = static_cast<std::uint32_t>(pool.size());
 
@@ -187,40 +188,71 @@ public:
                            VK_IMAGE_LAYOUT_UNDEFINED };
     });
 
-    VkWriteDescriptorSet w[3]{};
-    w[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             desc.set,
-             BINDING_SAMPLED,
-             0u,
-             n,
-             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-             sampled_infos.data(),
-             nullptr,
-             nullptr };
-    w[1] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             desc.set,
-             BINDING_STORAGE,
-             0u,
-             n,
-             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-             storage_infos.data(),
-             nullptr,
-             nullptr };
-    w[2] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             desc.set,
-             BINDING_SAMPLER,
-             0u,
-             n,
-             VK_DESCRIPTOR_TYPE_SAMPLER,
-             sampler_infos.data(),
-             nullptr,
-             nullptr };
+    std::vector<VkWriteDescriptorSet> w{};
+    std::uint32_t num_writes{ 0 };
+    if (!sampled_infos.empty()) {
+      auto& write = w.emplace_back();
+      write = {
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        nullptr,
+        desc.set,
+        BINDING_SAMPLED,
+        0u,
+        n,
+        VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+        sampled_infos.data(),
+        nullptr,
+        nullptr,
+      };
+      num_writes++;
+    }
+    if (!storage_infos.empty()) {
+      auto& write = w.emplace_back();
 
-    vkUpdateDescriptorSets(
-      BindlessAccess<Ctx>::device(ctx), 3u, w, 0u, nullptr);
+      write = {
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        nullptr,
+        desc.set,
+        BINDING_STORAGE,
+        0u,
+        n,
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        storage_infos.data(),
+        nullptr,
+        nullptr,
+      };
+
+      num_writes++;
+    }
+    if (!sampler_infos.empty()) {
+      auto& write = w.emplace_back();
+
+      write = {
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        nullptr,
+        desc.set,
+        BINDING_SAMPLER,
+        0u,
+        n,
+        VK_DESCRIPTOR_TYPE_SAMPLER,
+        sampler_infos.data(),
+        nullptr,
+        nullptr,
+      };
+
+      num_writes++;
+    }
+
+    if (num_writes > 0) {
+#if LVK_VULKAN_PRINT_COMMANDS
+      LLOGL("vkUpdateDescriptorSets()\n");
+#endif // LVK_VULKAN_PRINT_COMMANDS
+      access::wait_for_latest(
+        ctx); // immediate_->wait(immediate_->getLastSubmitHandle());
+      ZoneScopedNC("vkUpdateDescriptorSets()", 0xFF0000);
+      vkUpdateDescriptorSets(
+        BindlessAccess<Ctx>::device(ctx), num_writes, w.data(), 0u, nullptr);
+    }
   }
 
   static auto sync_on_frame_acquire(Ctx& ctx) -> void

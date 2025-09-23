@@ -400,6 +400,11 @@ struct BindlessAccess<VulkanContext>
   {
     c.defer_task(std::move(f));
   }
+  static auto wait_for_latest(VulkanContext& c)
+  {
+    c.get_immediate_commands().wait(
+      c.get_immediate_commands().get_last_submit_handle());
+  }
   static auto process_pre_frame_work(VulkanContext& c)
   {
     if (c.pre_frame_queue.empty())

@@ -7,6 +7,7 @@
 #include "sv/object_handle.hpp"
 #include "sv/pipeline.hpp"
 #include "sv/shader/shader.hpp"
+#include "sv/texture.hpp"
 #include "sv/tracing.hpp"
 #include "sv/transitions.hpp"
 #include "vulkan/vulkan_core.h"
@@ -203,6 +204,28 @@ Renderer::Renderer(IContext& ctx,
                                      .depth_format = Format::Z_F32_S_UI8,
                                      .debug_name = "Cascade Shadow Pipeline",
                                    });
+  directional_shadow.sampler = VulkanTextureND::create(
+    *context,
+    VkSamplerCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+      .pNext = nullptr,
+      .flags = 0,
+      .magFilter = VK_FILTER_LINEAR,
+      .minFilter = VK_FILTER_LINEAR,
+      .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+      .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+      .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+      .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+      .mipLodBias = 0.0F,
+      .anisotropyEnable = VK_FALSE,
+      .maxAnisotropy = 1.0F,
+      .compareEnable = VK_TRUE,
+      .compareOp = VK_COMPARE_OP_GREATER,
+      .minLod = 0.0F,
+      .maxLod = 4.0F,
+      .borderColor = VK_BORDER_COLOR_INT_OPAQUE_WHITE,
+      .unnormalizedCoordinates = VK_FALSE,
+    });
 
   auto&& [w, h] = extent;
   resize(w, h);
@@ -399,6 +422,8 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
   }
 
   {
+    ZoneScopedNC("Directional shadow pass", 0x0F0F0F);
+
     struct PC
     {
       std::uint64_t ubo{};
@@ -485,6 +510,10 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
       std::uint32_t material_tex;
       std::uint32_t uvs_tex;
       std::uint32_t sampler_id;
+
+      std::uint32_t shadow_tex;
+      std::uint32_t shadow_sampler_id;
+      std::uint32_t shadow_layers;
       std::uint64_t ubo;
     } pc{
       deferred_mrt.oct_normals_extras_tbd.index(),
@@ -492,6 +521,9 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
       deferred_mrt.material_id.index(),
       deferred_mrt.uvs.index(),
       0,
+      directional_shadow.texture.index(),
+      directional_shadow.sampler.index(),
+      4,
       ubo.get(current_frame),
     };
     buf.cmd_bind_depth_state({
@@ -560,7 +592,7 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
     canvas_3d.frustum(
       glm::lookAt(
         glm::vec3(cos(glfwGetTime()), initial_pos, sin(glfwGetTime())),
-        glm::vec3{ 0, 0, 0 },
+        glm::vec3{ 0, 7, -4 },
         glm::vec3(0.0f, 1.0f, 0.0f)),
       glm::perspective(
         glm::radians(60.0f), static_cast<float>(w) / h, 10.0f, 30.0f),
@@ -612,10 +644,16 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
           .store_op = StoreOp::Store,
         },
       },
+      .depth = {
+                .load_op = LoadOp::Load, 
+                .store_op = StoreOp::DontCare,
+            },
     };
 
     const Framebuffer ui_framebuffer{
       .color = { Framebuffer::AttachmentDescription{ present } },
+      .depth_stencil = { Framebuffer::AttachmentDescription{
+        deferred_mrt.depth_32 } },
       .debug_name = "Swapchain_UI"
     };
 

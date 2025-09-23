@@ -237,7 +237,7 @@ App::create(const ApplicationConfiguration& config)
   auto tmp = App{ config, std::move(w) };
 
   auto&& [ww, hh] =
-    config.extent_if_not_fullscreen.value_or(std::make_tuple(1280, 1024));
+    config.extent_if_not_fullscreen.value_or(std::make_tuple(1280, 800));
 
   tmp.allocator->set_verbose(true);
 #ifdef USE_CERR
