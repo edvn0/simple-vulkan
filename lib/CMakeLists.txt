@@ -34,6 +34,8 @@ target_link_libraries(sv
     GPUOpen::VulkanMemoryAllocator
     imgui_glfw
     tinyobjloader_double
+    assimp::assimp
+    meshoptimizer
 )
 
 function(enable_sane_warnings target)

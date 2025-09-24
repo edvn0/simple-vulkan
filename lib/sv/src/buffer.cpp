@@ -129,7 +129,7 @@ VulkanDeviceBuffer::create(IContext& ctx, const BufferDescription& w)
            description.debug_name);
 
   if (!description.data.empty()) {
-    buffer->upload(description.data);
+    buffer->upload(description.data, 0, &ctx);
     ctx.flush_mapped_memory(handle,
                             {
                               .offset = 0,
@@ -141,8 +141,16 @@ VulkanDeviceBuffer::create(IContext& ctx, const BufferDescription& w)
 
 auto
 VulkanDeviceBuffer::upload(const std::span<const std::byte> data,
-                           std::uint64_t offset) -> void
+                           std::uint64_t offset,
+                           IContext* staging_allocator_context) -> void
 {
+  if (allocation_info.pMappedData == nullptr &&
+      staging_allocator_context != nullptr) {
+    staging_allocator_context->get_staging_allocator().upload(
+      *this, offset, data.size_bytes(), data.data());
+    return;
+  }
+
   assert(allocation_info.pMappedData != nullptr &&
          "Something strange has happened here!");
 

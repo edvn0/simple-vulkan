@@ -45,8 +45,9 @@ struct VulkanDeviceBuffer
   auto is_mapped() const { return allocation_info.pMappedData != nullptr; }
   auto get_device_address() const { return device_address; }
   auto get_buffer() const -> VkBuffer { return buffer; }
-  auto upload(const std::span<const std::byte> data, std::uint64_t offset = 0)
-    -> void;
+  auto upload(const std::span<const std::byte> data,
+              std::uint64_t offset = 0,
+              IContext* = nullptr) -> void;
 
   static auto create(IContext&, const BufferDescription&)
     -> Holder<BufferHandle>;

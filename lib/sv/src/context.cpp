@@ -314,88 +314,107 @@ auto
 VulkanContext::initialise_tracing() -> void
 {
 #if defined(HAS_TRACY_TRACING)
+  const auto& pd = device.physical_device; // VkPhysicalDevice from vk-bootstrap
+  const auto& dev = device;                // VkDevice
 
-  static PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR
-    get_calibrateable_time_domains = nullptr;
-  static PFN_vkGetCalibratedTimestampsEXT get_calibrated_timestamps = nullptr;
+  uint32_t ext_count = 0;
+  vkEnumerateDeviceExtensionProperties(pd, nullptr, &ext_count, nullptr);
+  std::vector<VkExtensionProperties> exts(ext_count);
+  vkEnumerateDeviceExtensionProperties(pd, nullptr, &ext_count, exts.data());
 
-  if (!get_calibrateable_time_domains && !get_calibrated_timestamps) {
-    get_calibrateable_time_domains =
-      reinterpret_cast<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR>(
-        vkGetInstanceProcAddr(
-          instance, "vkGetPhysicalDeviceCalibrateableTimeDomainsKHR"));
-    get_calibrated_timestamps =
-      reinterpret_cast<PFN_vkGetCalibratedTimestampsEXT>(
-        vkGetInstanceProcAddr(instance, "vkGetCalibratedTimestampsEXT"));
-  }
+  const bool has_calibrated_ext =
+    std::any_of(exts.begin(), exts.end(), [](const VkExtensionProperties& e) {
+      return std::strcmp(e.extensionName,
+                         VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) == 0 ||
+             std::strcmp(e.extensionName, "VK_KHR_calibrated_timestamps") == 0;
+    });
+
+  VkPhysicalDeviceVulkan12Features f12{
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES
+  };
+  VkPhysicalDeviceFeatures2 f2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                                &f12 };
+  vkGetPhysicalDeviceFeatures2(pd, &f2);
+  const bool has_host_query_reset = f12.hostQueryReset == VK_TRUE;
+
+  PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR get_time_domains_khr =
+    reinterpret_cast<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR>(
+      vkGetInstanceProcAddr(instance,
+                            "vkGetPhysicalDeviceCalibrateableTimeDomainsKHR"));
+  PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT get_time_domains_ext =
+    reinterpret_cast<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsEXT>(
+      vkGetInstanceProcAddr(instance,
+                            "vkGetPhysicalDeviceCalibrateableTimeDomainsEXT"));
+  PFN_vkGetCalibratedTimestampsEXT get_calibrated_timestamps_ext =
+    reinterpret_cast<PFN_vkGetCalibratedTimestampsEXT>(
+      vkGetInstanceProcAddr(instance, "vkGetCalibratedTimestampsEXT"));
 
   std::vector<VkTimeDomainEXT> time_domains;
-  static constexpr auto has_calibrated_timestamps = true; // Read from somewhere
-  if constexpr (has_calibrated_timestamps) {
-    uint32_t time_domain_count = 0;
-    get_calibrateable_time_domains(
-      device.physical_device, &time_domain_count, nullptr);
-    time_domains.resize(time_domain_count);
-    get_calibrateable_time_domains(
-      device.physical_device, &time_domain_count, time_domains.data());
+  get_time_domains_khr = nullptr;
+  if (has_calibrated_ext) {
+    uint32_t n = 0;
+    if (get_time_domains_khr)
+      get_time_domains_khr(pd, &n, nullptr);
+    else if (get_time_domains_ext)
+      get_time_domains_ext(pd, &n, nullptr);
+    time_domains.resize(n);
+    if (get_time_domains_khr)
+      get_time_domains_khr(pd, &n, time_domains.data());
+    else if (get_time_domains_ext)
+      get_time_domains_ext(pd, &n, time_domains.data());
   }
 
-  static constexpr auto supports_host_query =
-    true; //  vkFeatures12_.hostQueryReset
-  const bool hasHostQuery = supports_host_query && [&time_domains]() -> bool {
-    for (VkTimeDomainEXT domain : time_domains)
-      if (domain == VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_EXT ||
-          domain == VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_EXT)
-        return true;
-    return false;
-  }();
-  if (hasHostQuery) {
-    tracing->vulkan_context =
-      TracyVkContextHostCalibrated(device.physical_device,
-                                   device,
-                                   vkResetQueryPool,
-                                   get_calibrateable_time_domains,
-                                   get_calibrated_timestamps);
+  const bool has_host_clock_domain = std::any_of(
+    time_domains.begin(), time_domains.end(), [](VkTimeDomainEXT d) {
+      return d == VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_EXT ||
+             d == VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_EXT;
+    });
+
+  const bool can_use_host_calibrated =
+    has_calibrated_ext && has_host_query_reset && has_host_clock_domain;
+
+  if (can_use_host_calibrated) {
+    tracing->vulkan_context = TracyVkContextHostCalibrated(
+      pd,
+      dev,
+      vkResetQueryPool,
+      reinterpret_cast<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR>(
+        get_time_domains_khr ? get_time_domains_khr : get_time_domains_ext),
+      get_calibrated_timestamps_ext);
   } else {
-    const VkCommandPoolCreateInfo ciCommandPool = {
+    const VkCommandPoolCreateInfo pool_ci{
       .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-      .pNext = nullptr,
       .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT |
                VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
       .queueFamilyIndex = graphics_family,
     };
-    vkCreateCommandPool(
-      device, &ciCommandPool, nullptr, &tracing->command_pool);
-    // lvk::setDebugObjectName(
-    //  device,
-    //  VK_OBJECT_TYPE_COMMAND_POOL,
-    //  (uint64_t)tracing->command_pool,
-    //  "Command Pool: VulkanContextImpl::command_pool");
-    const VkCommandBufferAllocateInfo aiCommandBuffer = {
+    vkCreateCommandPool(dev, &pool_ci, nullptr, &tracing->command_pool);
+
+    const VkCommandBufferAllocateInfo alloc_ci{
       .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
       .commandPool = tracing->command_pool,
       .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
       .commandBufferCount = 1,
     };
-    vkAllocateCommandBuffers(
-      device, &aiCommandBuffer, &tracing->command_buffer);
-    if (has_calibrated_timestamps) {
-      tracing->vulkan_context =
-        TracyVkContextCalibrated(device.physical_device,
-                                 device,
-                                 graphics_queue,
-                                 tracing->command_buffer,
-                                 get_calibrateable_time_domains,
-                                 get_calibrated_timestamps);
+    vkAllocateCommandBuffers(dev, &alloc_ci, &tracing->command_buffer);
+
+    if (has_calibrated_ext && get_calibrated_timestamps_ext) {
+      tracing->vulkan_context = TracyVkContextCalibrated(
+        pd,
+        dev,
+        graphics_queue,
+        tracing->command_buffer,
+        reinterpret_cast<PFN_vkGetPhysicalDeviceCalibrateableTimeDomainsKHR>(
+          get_time_domains_khr ? get_time_domains_khr : get_time_domains_ext),
+        get_calibrated_timestamps_ext);
     } else {
-      tracing->vulkan_context = TracyVkContext(device.physical_device,
-                                               device,
-                                               graphics_queue,
-                                               tracing->command_buffer);
-    };
+      tracing->vulkan_context =
+        TracyVkContext(pd, dev, graphics_queue, tracing->command_buffer);
+    }
   }
+
   assert(tracing->vulkan_context);
-#endif // HAS_TRACY_TRACING
+#endif
 }
 
 VulkanContext::~VulkanContext()
@@ -552,7 +571,7 @@ VulkanContext::create(const Window& window, const ContextConfiguration& conf)
     phys_device_selector.set_minimum_version(1, 3)
       .set_surface(surface)
       .add_required_extension_features(maintenance_one_features)
-      .add_required_extension(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME)
+      .add_required_extensions({ VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME })
       .set_required_features(required_features)
       .set_required_features_11(required_11_features)
       .set_required_features_12(required_12_features)

@@ -115,11 +115,14 @@ FetchContent_MakeAvailable(tinyobj)
 
 find_package(Vulkan REQUIRED)
 
-FetchContent_Populate(imgui
-  URL https://github.com/ocornut/imgui/archive/docking.zip
-  SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/imgui
+FetchContent_Declare(imgui
+  GIT_REPOSITORY https://github.com/ocornut/imgui.git
+  GIT_TAG master
+  GIT_SHALLOW TRUE
 )
-set(imgui_dir ${CMAKE_CURRENT_BINARY_DIR}/imgui)
+FetchContent_MakeAvailable(imgui)
+
+set(imgui_dir ${imgui_SOURCE_DIR})
 
 add_library(imgui_glfw STATIC
   ${imgui_dir}/imgui.cpp
@@ -130,13 +133,43 @@ add_library(imgui_glfw STATIC
   ${imgui_dir}/backends/imgui_impl_glfw.cpp
   ${imgui_dir}/backends/imgui_impl_vulkan.cpp
 )
+
 target_include_directories(imgui_glfw PUBLIC ${imgui_dir} ${imgui_dir}/backends)
 target_link_libraries(imgui_glfw PUBLIC glfw Vulkan::Vulkan)
 # enable_sane_warnings(imgui_glfw)
 
+FetchContent_Declare(assimp
+  GIT_REPOSITORY https://github.com/assimp/assimp.git
+  GIT_TAG master
+  GIT_SHALLOW TRUE
+)
+set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_NO_EXPORT ON CACHE BOOL "" FORCE)
+set(ASSIMP_IMPORTERS_ENABLED OFF CACHE STRING "" FORCE)
+set(ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+
+set(ASSIMP_BUILD_GLTF_IMPORTER ON  CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_OBJ_IMPORTER  ON  CACHE BOOL "" FORCE)
+option(ASSIMP_BUILD_DRACO "Enable Draco compression for glTF" OFF)
+FetchContent_MakeAvailable(assimp)
+
+FetchContent_Declare(meshoptimizer
+  GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
+  GIT_TAG master
+  GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(meshoptimizer)
+
+
 add_subdirectory(lib)
 
-add_executable(simple-vulkan simple-vulkan.cpp)
+add_executable(simple-vulkan simple-vulkan.cpp key_mapping.cpp)
 target_link_libraries(simple-vulkan PRIVATE sv)
 target_compile_features(simple-vulkan PRIVATE cxx_std_23)
 enable_sane_warnings(simple-vulkan)

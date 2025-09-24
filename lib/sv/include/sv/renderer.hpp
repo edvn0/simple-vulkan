@@ -176,11 +176,6 @@ private:
                                const ShadowSplits& splits,
                                float z_near,
                                float z_far) -> ShadowUBOData;
-  auto build_single_cascade(const glm::vec3& light_dir,
-                            float half_extent,
-                            float z_near,
-                            float z_far) -> ShadowUBOData;
-
   std::uint32_t current_frame{ 0 };
 
 public:
