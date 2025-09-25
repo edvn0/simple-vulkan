@@ -976,6 +976,96 @@ VulkanContext::submit(ICommandBuffer& cmd, TextureHandle present)
   return handle;
 }
 
+static auto
+build_like(IContext& ctx,
+           const VulkanDeviceBuffer& src,
+           VkDeviceSize size,
+           std::string_view name) -> VulkanDeviceBuffer
+{
+  VulkanDeviceBuffer out{};
+  out.usage_flags = src.usage_flags;
+  out.memory_flags = src.memory_flags;
+
+  VkBufferCreateInfo ci{};
+  ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  ci.size = size;
+  ci.usage = src.usage_flags;
+  ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+  VmaAllocationCreateInfo aci{};
+  aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+  if (src.memory_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+    aci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+    aci.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+    aci.preferredFlags =
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+  }
+
+  vmaCreateBuffer(DeviceAllocator::the(),
+                  &ci,
+                  &aci,
+                  &out.buffer,
+                  &out.allocation,
+                  &out.allocation_info);
+
+  set_name(ctx, out.buffer, VK_OBJECT_TYPE_BUFFER, "Buffer::{}", name);
+
+  if (src.usage_flags & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) {
+    const VkBufferDeviceAddressInfo ai{
+      VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, nullptr, out.buffer
+    };
+    out.device_address = vkGetBufferDeviceAddress(ctx.get_device(), &ai);
+  }
+
+  out.is_coherent_memory = src.is_coherent_memory;
+  return out;
+}
+
+auto
+VulkanContext::recreate_buffer(const Holder<BufferHandle>& h,
+                               VkDeviceSize new_size,
+                               std::span<const std::byte> data,
+                               VkDeviceSize dst_offset,
+                               bool preserve_old) -> void
+{
+  auto* cur = buffers.get(*h);
+  if (!cur)
+    return;
+
+  const VkDeviceSize cur_cap = cur->allocation_info.size;
+
+  if (new_size <= cur_cap) {
+    if (!data.empty())
+      cur->upload(data, dst_offset, this);
+    return;
+  }
+
+  const std::string dbg = "Recreate::Buffer";
+  VulkanDeviceBuffer replacement = build_like(*this, *cur, new_size, dbg);
+
+  if (preserve_old && cur->buffer) {
+    auto cmd = get_immediate_commands().acquire();
+    VkBufferCopy region{ .srcOffset = 0, .dstOffset = 0, .size = cur_cap };
+    vkCmdCopyBuffer(
+      cmd.command_buffer, cur->buffer, replacement.buffer, 1, &region);
+    get_immediate_commands().wait(cmd.handle);
+  }
+
+  if (!data.empty()) {
+    replacement.upload(data, dst_offset, this);
+  }
+
+  std::swap(*cur, replacement);
+
+  defer_task([old = std::move(replacement)](IContext&) mutable {
+    if (old.allocation_info.pMappedData)
+      vmaUnmapMemory(DeviceAllocator::the(), old.allocation);
+    if (old.buffer)
+      vmaDestroyBuffer(DeviceAllocator::the(), old.buffer, old.allocation);
+  });
+}
+
 auto
 VulkanContext::destroy_texture_resources(VulkanTextureND& tex) -> void
 {

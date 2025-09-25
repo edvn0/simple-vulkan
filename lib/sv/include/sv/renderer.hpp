@@ -7,6 +7,7 @@
 #include "sv/common.hpp"
 #include "sv/imgui_renderer.hpp"
 #include "sv/line_canvas.hpp"
+#include "sv/mesh_definition.hpp"
 #include "sv/object_handle.hpp"
 #include "sv/object_holder.hpp"
 
@@ -77,6 +78,53 @@ struct ShadowSplits
   std::array<float, 8> half_extents{};
   std::uint32_t count{};
 };
+
+struct DrawKey
+{
+  const RenderMesh* mesh{};
+  std::uint32_t lod{};
+  std::uint32_t material_index{};
+  auto operator<=>(const DrawKey&) const = default;
+};
+
+struct DrawKeyHash
+{
+  auto operator()(const DrawKey& k) const noexcept -> std::size_t
+  {
+    std::size_t h = 0xcbf29ce484222325ULL;
+    const auto mix = [&](std::size_t x) {
+      h ^= x + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    };
+    mix(reinterpret_cast<std::size_t>(k.mesh));
+    mix(static_cast<std::size_t>(k.lod));
+    mix(static_cast<std::size_t>(k.material_index));
+    return h;
+  }
+};
+
+struct InstanceData
+{
+  glm::mat4 model;
+  std::uint32_t material_index{};
+  std::uint32_t pad0{}, pad1{}, pad2{};
+};
+
+struct MeshBatch
+{
+  std::vector<InstanceData> instances_cpu;
+  std::vector<VkDrawIndexedIndirectCommand> draws_cpu;
+  Holder<BufferHandle> instances_ssbo;
+  Holder<BufferHandle> indirect_buffer;
+  std::uint32_t base_instance{};
+};
+
+struct FrameDraws
+{
+  std::unordered_map<DrawKey, MeshBatch, DrawKeyHash> batches;
+  auto clear() { batches.clear(); }
+};
+
+static constexpr std::uint32_t frames_in_flight = 3;
 
 struct IRenderer
 {
@@ -172,11 +220,19 @@ private:
   float shadow_far = 300.f;
   FrameCountBuffer<ShadowUBOData> shadow_ubo;
   auto update_shadow_ubo_layers(const glm::vec3&) -> void;
-  auto build_centered_cascades(const glm::vec3& light_dir,
-                               const ShadowSplits& splits,
-                               float z_near,
-                               float z_far) -> ShadowUBOData;
+  auto build_centered_cascades(const glm::vec3&,
+                               const ShadowSplits&,
+                               float,
+                               float) -> ShadowUBOData;
   std::uint32_t current_frame{ 0 };
+
+  std::array<FrameDraws, frames_in_flight> frame_draws{};
+  auto build_frame_batches(std::uint32_t) -> void;
+
+  RenderMesh cube;
+
+  auto draw_gbuffer_batches(ICommandBuffer&) -> void;
+  auto draw_gbuffer_batches_shadow(ICommandBuffer&, CascadeIndex) -> void;
 
 public:
   Renderer(IContext&, const std::tuple<std::uint32_t, std::uint32_t>& extent);
@@ -184,6 +240,11 @@ public:
   auto begin_frame(const Camera&) -> void;
   auto record(ICommandBuffer&, TextureHandle) -> void override;
   auto resize(std::uint32_t, std::uint32_t) -> void override;
+
+  auto submit(const RenderMesh&,
+              const glm::mat4&,
+              std::uint32_t material_index,
+              std::uint32_t lod = 0) -> void;
 };
 
 }

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "sv/common.hpp"
+#include "sv/object_handle.hpp"
 #include "sv/strong.hpp"
 
 struct aiMesh;
@@ -15,6 +16,7 @@ namespace sv {
 constexpr auto calculate_lods{ true };
 constexpr auto max_lods{ 8ULL };
 constexpr auto magic_header{ 0xFAB2C1U };
+constexpr auto serial_version{ 0x1001 };
 
 struct Material
 {};
@@ -22,7 +24,7 @@ struct Material
 struct MeshHeader
 {
   std::uint32_t magic{ magic_header };
-  std::uint32_t mesh_serial_version{ 0x1001 };
+  std::uint32_t mesh_serial_version{ serial_version };
   std::uint32_t mesh_count{ 0 };
   std::uint32_t index_data_size{ 0 };
   std::uint32_t vertex_data_size{ 0 };
@@ -63,13 +65,42 @@ struct MeshFile
   MeshData mesh{};
 };
 
+class RenderMesh
+{
+
+  MeshFile file{};
+  Holder<BufferHandle> vertex_buffer;
+  Holder<BufferHandle> index_buffer;
+  Holder<BufferHandle> indirect_buffer;
+  struct DrawData
+  {
+    std::uint32_t transform_index{ 0 };
+    std::uint32_t material_index{ 0 };
+  };
+  Holder<BufferHandle> draw_data_buffer;
+  struct Transform
+  {
+    glm::mat4 transform;
+  };
+  Holder<BufferHandle> transform_buffer;
+  Holder<BufferHandle> material_buffer;
+
+public:
+  static auto create(IContext&, const std::string_view)
+    -> std::optional<RenderMesh>;
+
+  auto get_file() const -> const auto& { return file; }
+  auto get_vertex_buffer() const -> const auto& { return vertex_buffer; }
+  auto get_index_buffer() const -> const auto& { return index_buffer; }
+};
+
 auto
-load_mesh_data(const std::string_view) -> std::optional<MeshFile>;
+load_mesh_file(const std::string_view) -> std::optional<MeshFile>;
 auto
-convert_assimp_mesh(const aiMesh*, MeshData&, VertexOffset&, IndexOffset&)
-  -> Mesh;
+save_mesh_file(const std::string_view, const MeshFile&) -> void;
+
 auto
-load_mesh_file(const std::string_view) -> std::optional<MeshData>;
+load_mesh_data(const std::string_view) -> std::optional<MeshData>;
 auto
 save_mesh_data(const std::string_view, const MeshData&) -> bool;
 

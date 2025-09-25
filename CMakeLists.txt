@@ -101,7 +101,7 @@ FetchContent_MakeAvailable(spirv-reflect)
 FetchContent_Declare(
   tracy
   GIT_REPOSITORY https://github.com/wolfpld/tracy.git
-  GIT_TAG master
+  GIT_TAG 0a5aa506b6c522fe37e30244e0a2def9ca34e748
 )
 FetchContent_MakeAvailable(tracy)
 
@@ -117,7 +117,7 @@ find_package(Vulkan REQUIRED)
 
 FetchContent_Declare(imgui
   GIT_REPOSITORY https://github.com/ocornut/imgui.git
-  GIT_TAG master
+  GIT_TAG v1.92.3
   GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(imgui)
@@ -140,7 +140,7 @@ target_link_libraries(imgui_glfw PUBLIC glfw Vulkan::Vulkan)
 
 FetchContent_Declare(assimp
   GIT_REPOSITORY https://github.com/assimp/assimp.git
-  GIT_TAG master
+  GIT_TAG v6.0.2
   GIT_SHALLOW TRUE
 )
 set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)

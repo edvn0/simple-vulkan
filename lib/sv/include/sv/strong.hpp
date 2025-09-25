@@ -1,8 +1,11 @@
 #pragma once
+
 #include <compare>
 #include <cstdint>
 #include <functional>
 #include <type_traits>
+
+namespace sv {
 
 template<class T>
 concept trivially_pod =
@@ -58,18 +61,23 @@ struct Strong : Mixins<Strong<T, Tag, Mixins...>, T>...
   explicit constexpr operator T() const { return value; }
 };
 
+// aliases
+struct VertexOffsetTag;
+struct IndexOffsetTag;
+struct CascadeIndexTag;
+
+using VertexOffset = Strong<std::uint32_t, VertexOffsetTag, Equality, Additive>;
+using IndexOffset = Strong<std::uint32_t, IndexOffsetTag, Equality, Additive>;
+using CascadeIndex = Strong<std::uint32_t, CascadeIndexTag, Equality, Additive>;
+
+}
+
 template<class T, class Tag, template<class, class> class... Ms>
-struct std::hash<Strong<T, Tag, Ms...>>
+struct std::hash<sv::Strong<T, Tag, Ms...>>
 {
-  auto operator()(const Strong<T, Tag, Ms...>& v) const noexcept -> std::size_t
+  auto operator()(const sv::Strong<T, Tag, Ms...>& v) const noexcept
+    -> std::size_t
   {
     return std::hash<T>{}(v.get());
   }
 };
-
-// aliases
-struct VertexOffsetTag;
-struct IndexOffsetTag;
-
-using VertexOffset = Strong<std::uint32_t, VertexOffsetTag, Equality, Additive>;
-using IndexOffset = Strong<std::uint32_t, IndexOffsetTag, Equality, Additive>;

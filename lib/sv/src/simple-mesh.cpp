@@ -41,19 +41,21 @@ make_buffers(IContext& ctx,
              const std::vector<std::uint32_t>& indices)
   -> std::pair<Holder<BufferHandle>, Holder<BufferHandle>>
 {
-  BufferDescription vbd{ .data = as_bytes(vertices),
-                         .usage = BufferUsageBits::Vertex,
-                         .storage = StorageType::Device,
-                         .size = vertices.size() * sizeof(VertexPNV2),
-                         .debug_name = name };
-  auto vb = VulkanDeviceBuffer::create(ctx, vbd);
+  auto vb =
+    VulkanDeviceBuffer::create(ctx,
+                               { .data = as_bytes(vertices),
+                                 .usage = BufferUsageBits::Vertex,
+                                 .storage = StorageType::Device,
+                                 .size = vertices.size() * sizeof(VertexPNV2),
+                                 .debug_name = name });
 
-  BufferDescription ibd{ .data = as_bytes(indices),
-                         .usage = BufferUsageBits::Index,
-                         .storage = StorageType::Device,
-                         .size = indices.size() * sizeof(std::uint32_t),
-                         .debug_name = name };
-  auto ib = VulkanDeviceBuffer::create(ctx, ibd);
+  auto ib =
+    VulkanDeviceBuffer::create(ctx,
+                               { .data = as_bytes(indices),
+                                 .usage = BufferUsageBits::Index,
+                                 .storage = StorageType::Device,
+                                 .size = indices.size() * sizeof(std::uint32_t),
+                                 .debug_name = name });
 
   return { std::move(vb), std::move(ib) };
 }

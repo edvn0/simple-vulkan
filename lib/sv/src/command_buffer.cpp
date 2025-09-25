@@ -251,8 +251,11 @@ CommandBuffer::cmd_begin_rendering(const RenderPass& render_pass,
       .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
       .loadOp = load_op_to_vk_attachment_load_op(desc_depth.load_op),
       .storeOp = store_op_to_vk_attachment_store_op(desc_depth.store_op),
-      .clearValue = { .depthStencil = { .depth = desc_depth.clear_depth,
-                                        .stencil = desc_depth.clear_stencil } },
+      .clearValue = { .depthStencil = { 
+        .depth = desc_depth.clear_depth,
+        .stencil = desc_depth.clear_stencil,
+        } 
+      },
     };
     if (desc_depth.store_op == StoreOp::MsaaResolve) {
       assert(depth_texture_obj->samples == samples);

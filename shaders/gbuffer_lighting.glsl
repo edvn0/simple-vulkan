@@ -45,7 +45,7 @@ vec3
 reconstruct_world_position(float depth, vec2 uv)
 {
   vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
-  vec4 wpos = pc.ubo.inverse_view_proj * ndc;
+  vec4 wpos = pc.ubo.u.inverse_view_proj * ndc;
   return wpos.xyz / wpos.w;
 }
 
@@ -63,10 +63,10 @@ main()
     textureBindless2D(pc.shadow_tex, pc.shadow_sampler_id, v_uv).r;
 
   vec3 n = decode_oct(ne.rg);
-  vec3 l = normalize(pc.ubo.light_direction.xyz);
+  vec3 l = normalize(pc.ubo.u.light_direction.xyz);
 
   vec3 wpos = reconstruct_world_position(depth, v_uv);
-  vec3 v = normalize(pc.ubo.camera_position.xyz - wpos);
+  vec3 v = normalize(pc.ubo.u.camera_position.xyz - wpos);
   vec3 h = normalize(l + v);
 
   float ndotl = max(dot(n, l), 0.0);

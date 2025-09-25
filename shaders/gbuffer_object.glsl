@@ -2,52 +2,59 @@
 
 #include <ubo.glsl>
 
-layout(location = 0) in vec3 v_pos;
-layout(location = 1) in vec3 v_normals;
-layout(location = 2) in vec2 v_uvs;
+layout(location = 0) in vec3 in_pos;
+layout(location = 1) in vec4 in_tex_coords; // R16G16B16A16_SFLOAT
+layout(location = 2) in vec4 in_normals;    // A2B10G10R10_SNORM_PACK32
+layout(location = 3) in vec4 in_tangents;   // A2B10G10R10_SNORM_PACK32
+layout(location = 4) in vec4 in_bitangents; // A2B10G10R10_UNORM_PACK32
 
-layout(location = 0) out vec3 out_world_position;
-layout(location = 1) out vec3 out_world_normals;
-layout(location = 2) out vec2 out_uvs;
+layout(location = 0) out vec3 v_world_pos;
+layout(location = 1) out vec3 v_world_nrm;
+layout(location = 2) out vec2 v_uv;
+layout(location = 3) out flat uint v_material_index;
 
 layout(push_constant) uniform PC
 {
-  mat4 model;
   UboRef ubo;
-  uint material_index;
-  uint _pad;
+  InstancesRef instances;
 }
 pc;
 
 void
 main()
 {
-  vec4 wp = pc.model * vec4(v_pos, 1.0);
-  out_world_position = wp.xyz;
-  out_world_normals =
-    normalize((transpose(inverse(pc.model)) * vec4(v_normals, 0.0)).xyz);
-  out_uvs = v_uvs;
-  gl_Position = pc.ubo.view_proj * wp;
+  uint idx = gl_BaseInstance + gl_InstanceIndex;
+  InstanceData d = pc.instances.data[idx];
+
+  vec4 wp = d.model * vec4(in_pos, 1.0);
+  v_world_pos = wp.xyz;
+
+  mat3 nrm_m = mat3(transpose(inverse(d.model)));
+  v_world_nrm = normalize(nrm_m * in_normals.xyz);
+
+  v_uv = in_tex_coords.xy;
+  v_material_index = d.material_index;
+
+  gl_Position = pc.ubo.u.view_proj * wp;
 }
 
 #pragma stage : fragment
 
 #include <ubo.glsl>
 
-layout(location = 0) in vec3 out_world_position;
-layout(location = 1) in vec3 out_world_normals;
-layout(location = 2) in vec2 out_uvs;
+layout(location = 0) in vec3 v_world_pos;
+layout(location = 1) in vec3 v_world_nrm;
+layout(location = 2) in vec2 v_uv;
+layout(location = 3) in flat uint v_material_index;
 
-layout(location = 0) out uint out_material_id_bits;   // bind to R_F32
-layout(location = 1) out vec4 out_oct_normals_extras; // bind to A2R10G10B10_UN
-layout(location = 2) out vec2 out_texture_coords;     // bind to RGF16
+layout(location = 0) out uint out_material_id_bits;   // R_UI32
+layout(location = 1) out vec4 out_oct_normals_extras; // A2R10G10B10_UN
+layout(location = 2) out vec2 out_texture_coords;     // RG_F16
 
 layout(push_constant) uniform PC
 {
-  mat4 model;
   UboRef ubo;
-  uint material_index;
-  uint _pad;
+  InstancesRef instances;
 }
 pc;
 
@@ -63,8 +70,8 @@ encode_oct(vec3 n)
 void
 main()
 {
-  vec2 oct = encode_oct(out_world_normals);
-  out_material_id_bits = pc.material_index;
+  vec2 oct = encode_oct(v_world_nrm);
+  out_material_id_bits = v_material_index;
   out_oct_normals_extras = vec4(oct, 0.0, 1.0);
-  out_texture_coords = out_uvs;
+  out_texture_coords = v_uv;
 }

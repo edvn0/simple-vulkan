@@ -9,6 +9,7 @@
 #include <expected>
 #include <format>
 #include <glm/glm.hpp>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -25,6 +26,11 @@
   {                                                                            \
     using C = std::underlying_type_t<X>;                                       \
     return static_cast<X>(static_cast<C>(lhs) & static_cast<C>(rhs));          \
+  }                                                                            \
+  constexpr auto operator==(X lhs, std::integral auto R)->bool                 \
+  {                                                                            \
+    return static_cast<bool>(static_cast<std::underlying_type_t<X>>(lhs) ==    \
+                             R);                                               \
   }
 
 static constexpr auto
@@ -848,5 +854,15 @@ is_depth_or_stencil_format(const Format format) -> bool
 {
   return is_depth_or_stencil_format(format_to_vk_format(format));
 }
+
+constexpr auto generate_n = [](const auto count, auto&& fn) {
+  using retval = std::invoke_result_t<decltype(fn), int>;
+  using count_type = decltype(count);
+  const auto size_count = static_cast<count_type>(count);
+  return std::views::iota(static_cast<count_type>(0), size_count) |
+         std::views::transform(
+           [f = std::move(fn)](const count_type i) { return f(i); }) |
+         std::ranges::to<std::vector<retval>>();
+};
 
 }

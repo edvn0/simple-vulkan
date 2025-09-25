@@ -364,7 +364,12 @@ public:
   }
 
   auto resize_next_frame() { should_resize = true; }
-  auto get_swapchain() const -> const auto& { return *swapchain; }
+  auto get_swapchain() -> VulkanSwapchain& override { return *swapchain; }
+  auto recreate_buffer(const Holder<BufferHandle>& h,
+                       VkDeviceSize new_size,
+                       std::span<const std::byte> data,
+                       VkDeviceSize dst_offset,
+                       bool preserve_old) -> void override;
 
   auto destroy_texture_resources(VulkanTextureND& tex) -> void;
 

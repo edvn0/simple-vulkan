@@ -83,36 +83,35 @@ VulkanDeviceBuffer::create(IContext& ctx, const BufferDescription& w)
   -> Holder<BufferHandle>
 {
   BufferDescription description{ w };
-  if constexpr (!use_staging && (description.storage & StorageType::Device) !=
-                                  StorageType{ 0 }) {
+  if constexpr (!use_staging &&
+                (description.storage & StorageType::Device) != 0) {
     description.storage = StorageType::HostVisible;
   }
 
   VkBufferUsageFlags usage_flags =
-    (description.storage & StorageType::Device) != StorageType{ 0 }
+    (description.storage & StorageType::Device) != 0
       ? VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT
       : 0;
 
   VkMemoryPropertyFlags memory_flags =
     storage_type_to_vk_memory_property_flags(description.storage);
 
-  if ((description.usage & BufferUsageBits::Index) != BufferUsageBits{ 0 })
+  if ((description.usage & BufferUsageBits::Index) != 0)
     usage_flags |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-  if ((description.usage & BufferUsageBits::Vertex) != BufferUsageBits{ 0 })
+  if ((description.usage & BufferUsageBits::Vertex) != 0)
     usage_flags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-  if ((description.usage & BufferUsageBits::Uniform) != BufferUsageBits{ 0 })
+  if ((description.usage & BufferUsageBits::Uniform) != 0)
     usage_flags |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-  if ((description.usage & BufferUsageBits::Storage) != BufferUsageBits{ 0 })
+  if ((description.usage & BufferUsageBits::Storage) != 0)
     usage_flags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                    VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-  if ((description.usage & BufferUsageBits::Indirect) != BufferUsageBits{ 0 })
+  if ((description.usage & BufferUsageBits::Indirect) != 0)
     usage_flags |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
   if ((description.usage &
-       (BufferUsageBits::Source | BufferUsageBits::Destination)) !=
-      BufferUsageBits{ 0 }) {
+       (BufferUsageBits::Source | BufferUsageBits::Destination)) != 0) {
     usage_flags |=
       VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     memory_flags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
@@ -125,17 +124,13 @@ VulkanDeviceBuffer::create(IContext& ctx, const BufferDescription& w)
   set_name(ctx,
            buffer->allocation_info.deviceMemory,
            VK_OBJECT_TYPE_DEVICE_MEMORY,
-           "DeviceMemory::::{}",
+           "DeviceMemory::Buffer::{}",
            description.debug_name);
 
   if (!description.data.empty()) {
     buffer->upload(description.data, 0, &ctx);
-    ctx.flush_mapped_memory(handle,
-                            {
-                              .offset = 0,
-                              .size = description.data.size_bytes(),
-                            });
   }
+
   return Holder{ &ctx, handle };
 }
 
@@ -155,8 +150,12 @@ VulkanDeviceBuffer::upload(const std::span<const std::byte> data,
          "Something strange has happened here!");
 
   const auto size = data.size_bytes();
-  std::memcpy(allocation_info.pMappedData, data.data() + offset, size);
-  vmaFlushAllocation(DeviceAllocator::the(), allocation, offset, size);
+  std::memcpy(static_cast<std::uint8_t*>(allocation_info.pMappedData) + offset,
+              data.data(),
+              size);
+  if (is_coherent_memory) {
+    vmaFlushAllocation(DeviceAllocator::the(), allocation, offset, size);
+  }
 }
 
 }

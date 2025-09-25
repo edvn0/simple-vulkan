@@ -28,13 +28,13 @@ StagingAllocator::StagingAllocator(IContext& ctx)
 
 void
 StagingAllocator::upload(VulkanDeviceBuffer& buffer,
-                         std::size_t dstOffset,
+                         std::size_t destination_offset,
                          std::size_t size,
                          const void* data)
 {
   if (buffer.is_mapped()) {
     buffer.upload(std::span(static_cast<const std::byte*>(data), size),
-                  dstOffset);
+                  destination_offset);
 
     return;
   }
@@ -46,17 +46,17 @@ StagingAllocator::upload(VulkanDeviceBuffer& buffer,
   while (size) {
     // get next staging buffer free offset
     auto desc = get_next_free_offset(static_cast<uint32_t>(size));
-    const auto chunkSize = std::min(static_cast<uint64_t>(size), desc.size);
+    const auto chunk_size = std::min(static_cast<uint64_t>(size), desc.size);
 
     // copy data into staging buffer
-    stg->upload(std::span(static_cast<const std::byte*>(data), chunkSize),
+    stg->upload(std::span(static_cast<const std::byte*>(data), chunk_size),
                 desc.offset);
 
     // do the transfer
     const VkBufferCopy copy = {
       .srcOffset = desc.offset,
-      .dstOffset = dstOffset,
-      .size = chunkSize,
+      .dstOffset = destination_offset,
+      .size = chunk_size,
     };
 
     const auto& wrapper = context.immediate_commands->acquire();
@@ -71,8 +71,8 @@ StagingAllocator::upload(VulkanDeviceBuffer& buffer,
       .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .buffer = buffer.get_buffer(),
-      .offset = dstOffset,
-      .size = chunkSize,
+      .offset = destination_offset,
+      .size = chunk_size,
     };
     VkPipelineStageFlags dstMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
     if (buffer.usage_flags & VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT) {
@@ -105,9 +105,9 @@ StagingAllocator::upload(VulkanDeviceBuffer& buffer,
     desc.handle = context.immediate_commands->submit(wrapper);
     regions.push_back(desc);
 
-    size -= chunkSize;
-    data = std::bit_cast<std::uint8_t*>(data) + chunkSize;
-    dstOffset += chunkSize;
+    size -= chunk_size;
+    data = std::bit_cast<std::uint8_t*>(data) + chunk_size;
+    destination_offset += chunk_size;
   }
 }
 

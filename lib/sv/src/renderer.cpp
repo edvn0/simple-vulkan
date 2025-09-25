@@ -4,13 +4,14 @@
 #include "sv/camera.hpp"
 #include "sv/common.hpp"
 #include "sv/context.hpp"
+#include "sv/mesh_definition.hpp"
 #include "sv/object_handle.hpp"
 #include "sv/pipeline.hpp"
 #include "sv/shader/shader.hpp"
+#include "sv/strong.hpp"
 #include "sv/texture.hpp"
 #include "sv/tracing.hpp"
 #include "sv/transitions.hpp"
-#include "vulkan/vulkan_core.h"
 
 #include <sv/simple-mesh.hpp>
 
@@ -22,89 +23,23 @@
 
 namespace sv {
 
-/*
 namespace {
 auto
-full_range_color(VkImage image) -> VkImageMemoryBarrier2
+make_device_buffer(IContext& ctx,
+                   const std::span<const std::byte> data,
+                   BufferUsageBits usage,
+                   std::string_view name) -> Holder<BufferHandle>
 {
-  VkImageMemoryBarrier2 b{};
-  b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-  b.image = image;
-  b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-  b.subresourceRange.baseMipLevel = 0;
-  b.subresourceRange.levelCount = 1;
-  b.subresourceRange.baseArrayLayer = 0;
-  b.subresourceRange.layerCount = 1;
-  return b;
-}
-
-auto
-to_general(VkCommandBuffer buf, VkImage image, VkImageLayout old_layout) -> void
-{
-  VkImageMemoryBarrier2 b = full_range_color(image);
-  b.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-  b.srcAccessMask = 0;
-  b.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-  b.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-  b.oldLayout = old_layout;
-  b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-  VkDependencyInfo dep{};
-  dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-  dep.imageMemoryBarrierCount = 1;
-  dep.pImageMemoryBarriers = &b;
-  vkCmdPipelineBarrier2(buf, &dep);
-}
-
-auto
-to_present(VkCommandBuffer buf, VkImage image) -> void
-{
-  VkImageMemoryBarrier2 b = full_range_color(image);
-  b.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-  b.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-  b.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
-  b.dstAccessMask = 0;
-  b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-  b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-  VkDependencyInfo dep{};
-  dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-  dep.imageMemoryBarrierCount = 1;
-  dep.pImageMemoryBarriers = &b;
-  vkCmdPipelineBarrier2(buf, &dep);
-}
-
-auto
-begin_record(VkCommandBuffer cmd, const sv::AcquiredFrame& af) -> void
-{
-  to_general(cmd, af.image, VK_IMAGE_LAYOUT_UNDEFINED);
-
-  VkRenderingAttachmentInfo color{};
-  color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-  color.imageView = af.view;
-  color.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-  color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-  color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-  color.clearValue.color = { .float32 = { 1.0F, 0.F, 0.F, 1.F } };
-
-  VkRenderingInfo ri{};
-  ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-  ri.renderArea = VkRect2D{ { 0, 0 }, af.extent };
-  ri.layerCount = 1;
-  ri.colorAttachmentCount = 1;
-  ri.pColorAttachments = &color;
-
-  vkCmdBeginRendering(cmd, &ri);
-}
-
-auto
-end_record(VkCommandBuffer cmd, const sv::AcquiredFrame& af) -> void
-{
-  vkCmdEndRendering(cmd);
-  to_present(cmd, af.image);
+  return VulkanDeviceBuffer::create(ctx,
+                                    BufferDescription{
+                                      .data = data,
+                                      .usage = usage,
+                                      .storage = StorageType::Device,
+                                      .size = data.size_bytes(),
+                                      .debug_name = std::string{ name },
+                                    });
 }
 }
-*/
 
 struct Renderer::Impl
 {
@@ -116,8 +51,11 @@ Renderer::Renderer(IContext& ctx,
   : context(&ctx)
   , impl(std::unique_ptr<Renderer::Impl, PimplDeleter>(new Renderer::Impl{},
                                                        PimplDeleter{}))
-  , ubo{ ctx, 3 }
-  , shadow_ubo{ ctx, 3 }
+  , ubo{ ctx, ctx.get_swapchain().swapchain.image_count, }
+  , shadow_ubo{
+    ctx,
+    ctx.get_swapchain().swapchain.image_count,
+  }
 {
   impl->simple = simple::SimpleGeometryMesh::create(
     *context,
@@ -129,8 +67,10 @@ Renderer::Renderer(IContext& ctx,
 
   const auto vertex_input = VertexInput::create({
     VertexFormat::Float3,
-    VertexFormat::Float3,
-    VertexFormat::Float2,
+    VertexFormat::HalfFloat4,
+    VertexFormat::Int_2_10_10_10_REV,
+    VertexFormat::Int_2_10_10_10_REV,
+    VertexFormat::Int_2_10_10_10_REV,
   });
 
   deferred_mrt.shader =
@@ -202,6 +142,7 @@ Renderer::Renderer(IContext& ctx,
                                      .vertex_input = vertex_input,
                                      .shader = *directional_shadow.shader,
                                      .depth_format = Format::Z_F32_S_UI8,
+                                     .cull_mode = CullMode::Back,
                                      .debug_name = "Cascade Shadow Pipeline",
                                    });
   directional_shadow.sampler = VulkanTextureND::create(
@@ -231,9 +172,79 @@ Renderer::Renderer(IContext& ctx,
   resize(w, h);
 
   imgui = std::make_unique<ImGuiRenderer>(*context, "fonts/Roboto-Regular.ttf");
+  cube = *RenderMesh::create(*context, "meshes/cube.cache.obj");
 }
 
 Renderer::~Renderer() = default;
+
+auto
+Renderer::build_frame_batches(const std::uint32_t frame_index) -> void
+{
+  auto& fd = frame_draws[frame_index % frames_in_flight];
+
+  for (auto&& [key, batch] : fd.batches) {
+    const auto index_count =
+      key.mesh->get_file().mesh.meshes.at(0).get_lod_index_count(key.lod);
+    const auto first_index =
+      key.mesh->get_file().mesh.meshes.at(0).lod_offset.at(key.lod);
+    const auto vertex_offset = static_cast<std::int32_t>(
+      key.mesh->get_file().mesh.meshes.at(0).vertex_offset);
+
+    batch.base_instance = 0;
+
+    VkDrawIndexedIndirectCommand cmd{};
+    cmd.indexCount = index_count;
+    cmd.instanceCount = static_cast<std::uint32_t>(batch.instances_cpu.size());
+    cmd.firstIndex = first_index;
+    cmd.vertexOffset = vertex_offset;
+    cmd.firstInstance = batch.base_instance;
+    batch.draws_cpu = { cmd };
+
+    const auto instances_bytes =
+      std::as_bytes(std::span{ batch.instances_cpu });
+    const auto draws_bytes = std::as_bytes(std::span{ batch.draws_cpu });
+
+    if (!batch.instances_ssbo.valid()) {
+      batch.instances_ssbo = make_device_buffer(*context,
+                                                instances_bytes,
+                                                BufferUsageBits::Storage |
+                                                  BufferUsageBits::Destination,
+                                                "InstancesSSBO");
+    } else {
+      context->recreate_buffer(batch.instances_ssbo,
+                               instances_bytes.size_bytes(),
+                               instances_bytes,
+                               0,
+                               false);
+    }
+    if (!batch.indirect_buffer.valid()) {
+      batch.indirect_buffer = make_device_buffer(*context,
+                                                 draws_bytes,
+                                                 BufferUsageBits::Indirect |
+                                                   BufferUsageBits::Destination,
+                                                 "IndirectBuffer");
+    } else {
+      context->recreate_buffer(
+        batch.indirect_buffer, draws_bytes.size_bytes(), draws_bytes, 0, false);
+    }
+  }
+}
+
+auto
+Renderer::submit(const RenderMesh& mesh,
+                 const glm::mat4& model,
+                 const std::uint32_t material_index,
+                 const std::uint32_t lod) -> void
+{
+  auto& fd = frame_draws[current_frame % frames_in_flight];
+  const DrawKey key{ &mesh, lod, material_index };
+  auto& batch = fd.batches[key];
+
+  InstanceData inst{};
+  inst.model = model;
+  inst.material_index = material_index;
+  batch.instances_cpu.emplace_back(inst);
+}
 
 auto
 Renderer::resize(const std::uint32_t width, const std::uint32_t height) -> void
@@ -331,6 +342,71 @@ clear_depth_image(VkCommandBuffer cmd,
 }
 
 auto
+Renderer::draw_gbuffer_batches_shadow(ICommandBuffer& buf,
+                                      const CascadeIndex cascade_index) -> void
+{
+  auto& fd = frame_draws[current_frame % frames_in_flight];
+
+  buf.cmd_bind_graphics_pipeline(*directional_shadow.pipeline);
+  buf.cmd_bind_depth_state({
+    .compare_operation = CompareOp::Greater,
+    .is_depth_write_enabled = true,
+  });
+
+  struct PC
+  {
+    std::uint64_t ubo_ref;
+    std::uint64_t instances_addr;
+    std::uint32_t cascade_index{ 0 };
+    std::uint32_t _pad{ 0 };
+  } pc{ shadow_ubo.get(current_frame), 0, cascade_index.get() };
+
+  for (auto& [key, batch] : fd.batches) {
+    pc.instances_addr = context->get_buffer_pool()
+                          .get(*batch.instances_ssbo)
+                          ->get_device_address();
+    buf.cmd_push_constants(pc, 0);
+
+    buf.cmd_bind_vertex_buffer(0, *key.mesh->get_vertex_buffer(), 0);
+    buf.cmd_bind_index_buffer(
+      *key.mesh->get_index_buffer(), IndexFormat::UI32, 0);
+
+    buf.cmd_draw_indexed_indirect(
+      *batch.indirect_buffer, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
+  }
+}
+
+auto
+Renderer::draw_gbuffer_batches(ICommandBuffer& buf) -> void
+{
+  auto& fd = frame_draws[current_frame % frames_in_flight];
+
+  buf.cmd_bind_graphics_pipeline(*deferred_mrt.pipeline);
+  buf.cmd_bind_depth_state({ .compare_operation = CompareOp::Greater,
+                             .is_depth_write_enabled = true });
+
+  struct PC
+  {
+    std::uint64_t ubo_ref;
+    std::uint64_t instances_addr;
+  } pc{ ubo.get(current_frame), 0 };
+
+  for (auto& [key, batch] : fd.batches) {
+    pc.instances_addr = context->get_buffer_pool()
+                          .get(*batch.instances_ssbo)
+                          ->get_device_address();
+    buf.cmd_push_constants(pc, 0);
+
+    buf.cmd_bind_vertex_buffer(0, *key.mesh->get_vertex_buffer(), 0);
+    buf.cmd_bind_index_buffer(
+      *key.mesh->get_index_buffer(), IndexFormat::UI32, 0);
+
+    buf.cmd_draw_indexed_indirect(
+      *batch.indirect_buffer, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
+  }
+}
+
+auto
 Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
 {
   // Couple of phases.
@@ -340,7 +416,8 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
   // 3: Forward rendering into the resolved lighting
   // 4: Sample resolved lighting in the swapchain
 
-  std::array<glm::mat4, 2> models{};
+  build_frame_batches(current_frame);
+
   {
     ZoneScopedNC("GBuffer", 0xFF00FF);
     const RenderPass gbuffer_render_pass{
@@ -382,80 +459,23 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
   };
 
     buf.cmd_begin_rendering(gbuffer_render_pass, gbuffer_framebuffer, {});
-    // Here we'll render using an indirect buffer with VkDrawIndirectCommand in
-    // the indirect buffer. For now, a super simple cube from a VB & IB
-    buf.cmd_bind_graphics_pipeline(*deferred_mrt.pipeline);
-    buf.cmd_bind_depth_state({
-      .compare_operation = CompareOp::Greater,
-      .is_depth_write_enabled = true,
-    });
-    buf.cmd_bind_vertex_buffer(0, *impl->simple.vertex_buffer, 0);
-    buf.cmd_bind_index_buffer(*impl->simple.index_buffer, IndexFormat::UI32, 0);
-
-    auto rotate = glm::rotate(glm::mat4{ 1.0F },
-                              static_cast<float>(glfwGetTime()),
-                              glm::vec3{ 0.0F, 1.0F, 1.0F });
-
-    models.at(0) = rotate;
-    struct PC
-    {
-      glm::mat4 model;
-      std::uint64_t ubo_ref;
-      std::uint32_t material_index;
-    } pc{
-      .model = rotate,
-      .ubo_ref = ubo.get(current_frame),
-      .material_index = 0,
-    };
-    models.at(0) = pc.model;
-    buf.cmd_push_constants(pc, 0);
-    buf.cmd_draw_indexed(impl->simple.index_count, 1, 0, 0, 0);
-
-    pc.model =
-      glm::translate(glm::scale(glm::mat4{ 1.0F }, { 100.0F, 1.0F, 100.0F }),
-                     glm::vec3{ 0, 3, 0 });
-    models.at(1) = pc.model;
-
-    buf.cmd_push_constants(pc, 0);
-    buf.cmd_draw_indexed(impl->simple.index_count, 1, 0, 0, 0);
+    draw_gbuffer_batches(buf);
     buf.cmd_end_rendering();
   }
 
   {
     ZoneScopedNC("Directional shadow pass", 0x0F0F0F);
-
-    struct PC
-    {
-      std::uint64_t ubo{};
-      glm::mat4 model{};
-    };
-
-    const RenderPass shadow_rp {
-        .depth = {
-          .load_op = LoadOp::Clear,
-          .store_op = StoreOp::Store,
-          .layer  =1,
-          .clear_depth = 0.0F,
-        },
-    };
-    const Framebuffer shadow_fb{
-      .depth_stencil =
-        Framebuffer::AttachmentDescription{
-          *directional_shadow.texture,
-        },
-    };
     ImageTransition::transition_layout(
       buf.get_command_buffer(),
       context->get_texture_pool().get(*directional_shadow.texture)->image,
       VK_IMAGE_LAYOUT_UNDEFINED,
       VK_IMAGE_LAYOUT_GENERAL,
-      VkImageSubresourceRange{
-        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
-        .baseMipLevel = 0,
-        .levelCount = VK_REMAINING_MIP_LEVELS,
-        .baseArrayLayer = 0,
-        .layerCount = VK_REMAINING_ARRAY_LAYERS,
-      });
+      { VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
+        0,
+        VK_REMAINING_MIP_LEVELS,
+        0,
+        VK_REMAINING_ARRAY_LAYERS });
+
     clear_depth_image(
       buf.get_command_buffer(),
       context->get_texture_pool().get(*directional_shadow.texture)->image,
@@ -464,31 +484,26 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
       context->get_texture_pool()
         .get(*directional_shadow.texture)
         ->layer_count);
-    buf.cmd_begin_rendering(shadow_rp, shadow_fb, {});
 
-    {
-      buf.cmd_bind_graphics_pipeline(*directional_shadow.pipeline);
-      buf.cmd_bind_depth_state({
-        .compare_operation = CompareOp::Greater,
-        .is_depth_write_enabled = true,
-      });
-      buf.cmd_bind_vertex_buffer(0, *impl->simple.vertex_buffer, 0);
-      buf.cmd_bind_index_buffer(
-        *impl->simple.index_buffer, IndexFormat::UI32, 0);
-
-      PC pc{
-        .ubo = shadow_ubo.get(current_frame),
-        .model = models.at(0),
+    for (std::uint8_t c = 0; c < 4; ++c) {
+      RenderPass rp{
+      .depth = {
+        .load_op = LoadOp::Clear,
+        .store_op = StoreOp::Store,
+        .layer = c,
+        .clear_depth = 0.0F,
+        .clear_stencil = 0xFF,
+      },
+    };
+      Framebuffer fb{
+        .depth_stencil =
+          Framebuffer::AttachmentDescription{ *directional_shadow.texture },
       };
-      buf.cmd_push_constants(pc, 0);
-      buf.cmd_draw_indexed(impl->simple.index_count, 1, 0, 0, 0);
 
-      pc.model = models.at(1);
-      buf.cmd_push_constants(pc, 0);
-      buf.cmd_draw_indexed(impl->simple.index_count, 1, 0, 0, 0);
+      buf.cmd_begin_rendering(rp, fb, {});
+      draw_gbuffer_batches_shadow(buf, CascadeIndex{ c });
+      buf.cmd_end_rendering();
     }
-
-    buf.cmd_end_rendering();
   }
 
   {
@@ -678,6 +693,8 @@ Renderer::record(ICommandBuffer& buf, TextureHandle present) -> void
 
     buf.cmd_end_rendering();
   }
+  auto& fd = frame_draws[current_frame % frames_in_flight];
+  fd.clear();
 
   current_frame++;
 }

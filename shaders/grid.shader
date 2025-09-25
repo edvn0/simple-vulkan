@@ -25,12 +25,12 @@ main()
 {
   int idx = indices[gl_VertexIndex];
   vec3 position = pos[idx] * grid_params.x; // grid_size
-  position.x += ubo_ref.camera_position.x;
-  position.z += ubo_ref.camera_position.z;
+  position.x += ubo_ref.u.camera_position.x;
+  position.z += ubo_ref.u.camera_position.z;
   position += origin.xyz;
 
-  out_camPos = ubo_ref.camera_position.xz;
-  gl_Position = ubo_ref.projection * ubo_ref.view * vec4(position, 1.0);
+  out_camPos = ubo_ref.u.camera_position.xz;
+  gl_Position = ubo_ref.u.projection * ubo_ref.u.view * vec4(position, 1.0);
   uv = position.xz;
 }
 
@@ -45,8 +45,7 @@ layout(push_constant) uniform PushConstants
   vec4 origin;
   vec4 grid_colour_thin;
   vec4 grid_colour_thick;
-  vec4 grid_params; // x=grid_size, y=grid_cell_size,
-                    // z=grid_min_pixels_between_cells, w=padding
+  vec4 grid_params;
 };
 
 layout(location = 0) in vec2 uv;

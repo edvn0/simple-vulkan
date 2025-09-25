@@ -3,8 +3,8 @@
 #include "sv/camera.hpp"
 #include "sv/context.hpp"
 #include "sv/event_system.hpp"
-#include "sv/renderer.hpp"
 #include "sv/mesh_definition.hpp"
+#include "sv/renderer.hpp"
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -241,8 +241,11 @@ run(std::span<const std::string_view> args)
     &app, static_cast<VulkanContext*>(context.get()));
   event_dispatcher.subscribe<sv::EventSystem::FramebufferSizeEvent>(fb_resize);
 
-  auto load = load_mesh_file("meshes/cube.obj");
-  (void)save_mesh_data("meshes/cube.cache.obj", *load);
+  auto load = load_mesh_data("meshes/cube.obj");
+  save_mesh_data("meshes/cube.cache.obj", *load);
+  auto load_cache = load_mesh_file("meshes/cube.cache.obj");
+
+  auto cube = *RenderMesh::create(*context, "meshes/cube.cache.obj");
 
   double last_time = glfwGetTime();
   while (!app.should_close()) {
@@ -262,6 +265,11 @@ run(std::span<const std::string_view> args)
 
     renderer.begin_frame(camera);
     auto& cmd = context->acquire_command_buffer();
+    renderer.submit(cube, glm::mat4{ 1.0F }, 0, 0);
+    auto scale = glm::translate(
+      glm::scale(glm::mat4{ 1.0F }, glm::vec3{ 100.0F, 0.1F, 100.F }),
+      glm::vec3{ 0, 5, 0 });
+    renderer.submit(cube, scale, 0, 0);
     renderer.record(cmd, context->get_current_swapchain_texture());
     context->submit(cmd, context->get_current_swapchain_texture());
   }

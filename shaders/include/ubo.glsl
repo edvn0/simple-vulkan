@@ -1,7 +1,7 @@
 #ifndef UBO_GLSL
 #define UBO_GLSL
 
-layout(buffer_reference, std430) readonly buffer UboRef
+struct UboData
 {
   mat4 view;
   mat4 projection;
@@ -11,7 +11,23 @@ layout(buffer_reference, std430) readonly buffer UboRef
   mat4 inverse_view_proj;
   vec4 light_direction;
   vec4 camera_position;
-}
-ubo;
+};
+
+layout(buffer_reference, std430) readonly buffer UboRef
+{
+  UboData u;
+};
+
+struct InstanceData
+{
+  mat4 model;
+  uint material_index;
+  uint pad0, pad1, pad2;
+};
+
+layout(buffer_reference, std430) readonly buffer InstancesRef
+{
+  InstanceData data[];
+};
 
 #endif

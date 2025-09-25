@@ -11,6 +11,7 @@ namespace sv {
 
 class ImmediateCommands;
 class StagingAllocator;
+class VulkanSwapchain;
 
 struct ContextConfiguration
 {
@@ -70,6 +71,13 @@ struct IContext
   virtual auto get_current_swapchain_texture() -> TextureHandle = 0;
   virtual auto acquire_command_buffer() -> ICommandBuffer& = 0;
   virtual auto submit(ICommandBuffer&, TextureHandle) -> SubmitHandle = 0;
+
+  virtual auto get_swapchain() -> VulkanSwapchain& = 0;
+  virtual auto recreate_buffer(const Holder<BufferHandle>& h,
+                               VkDeviceSize new_size,
+                               std::span<const std::byte> data,
+                               VkDeviceSize dst_offset,
+                               bool preserve_old) -> void = 0;
 
   struct OffsetSize
   {

@@ -1,4 +1,5 @@
 #include "sv/mesh_definition.hpp"
+#include "sv/buffer.hpp"
 
 #include <fstream>
 #include <span>
@@ -14,8 +15,13 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 #include <ranges>
+#include <type_traits>
 
 namespace sv {
+
+auto
+convert_assimp_mesh(const aiMesh*, MeshData&, VertexOffset&, IndexOffset&)
+  -> Mesh;
 
 #define EXPECT_WRITE(stream, ptr, size)                                        \
   if (!stream.write(reinterpret_cast<const char*>(ptr), size))                 \
@@ -46,6 +52,7 @@ struct Serializer<BoundingBox>
   {
     EXPECT_READ(in, &out, sizeof(glm::vec3));
     EXPECT_READ_OFFSET(in, &out, sizeof(glm::vec3), sizeof(glm::vec3));
+    return true;
   }
 };
 template<class T>
@@ -63,6 +70,7 @@ struct Serializer<T>
   static auto deserialise(std::istream& in, T& val) -> bool
   {
     EXPECT_READ_OFFSET(in, &val, 0, sizeof(T));
+    return true;
   }
 };
 
@@ -71,11 +79,11 @@ namespace {
 template<class T>
 concept has_custom_serializer =
   requires(std::istream& in, std::ostream& o, const T& t, T& out) {
-    Serializer<T>::serialise(o, t);
-    Serializer<T>::deserialise(in, out);
+    { Serializer<T>::serialise(o, t) } -> std::same_as<bool>;
+    { Serializer<T>::deserialise(in, out) } -> std::same_as<bool>;
   };
 
-auto
+inline auto
 read_exact(std::istream& s, void* dst, std::size_t n) -> bool
 {
   if (n >
@@ -110,53 +118,6 @@ read_vec(std::istream& s, std::vector<T>& out, std::size_t count) -> bool
   return read_exact(s, out.data(), count * sizeof(T));
 }
 
-// Overloads
-
-inline auto
-operator>>(std::istream& s, MeshHeader& out) -> std::istream&
-{
-  MeshHeader tmp{};
-  if (!read_pod(s, tmp.magic)) {
-    s.setstate(std::ios::failbit);
-    return s;
-  }
-  if (tmp.magic != magic_header) {
-    s.setstate(std::ios::failbit);
-    return s;
-  }
-  if (!read_pod(s, tmp.mesh_serial_version)) {
-    s.setstate(std::ios::failbit);
-    return s;
-  }
-
-  if (!read_pod(s, tmp.mesh_count)) {
-    s.setstate(std::ios::failbit);
-    return s;
-  }
-  if (!read_pod(s, tmp.index_data_size)) {
-    s.setstate(std::ios::failbit);
-    return s;
-  }
-  if (!read_pod(s, tmp.vertex_data_size)) {
-    s.setstate(std::ios::failbit);
-    return s;
-  }
-
-  out = tmp;
-  return s;
-}
-
-template<trivially_serializable T>
-  requires(has_custom_serializer<T>)
-inline auto
-operator<<(std::ostream& out, const std::vector<T>& in) -> std::ostream&
-{
-  for (const auto& v : in) {
-    out << Serializer<T>::serialise(out, v);
-  }
-  return out;
-}
-
 inline auto
 write_exact(std::ostream& s, const void* src, std::size_t n) -> std::ostream&
 {
@@ -174,6 +135,114 @@ inline auto
 write_u8(std::ostream& s, std::uint8_t v) -> std::ostream&
 {
   return write_exact(s, &v, sizeof(v));
+}
+
+inline auto
+operator>>(std::istream& s, MeshHeader& out) -> std::istream&
+{
+  MeshHeader tmp{};
+  if (!read_pod(s, tmp.magic)) {
+    s.setstate(std::ios::failbit);
+    return s;
+  }
+  if (tmp.magic != magic_header) {
+    s.setstate(std::ios::failbit);
+    return s;
+  }
+  if (!read_pod(s, tmp.mesh_serial_version)) {
+    s.setstate(std::ios::failbit);
+    return s;
+  }
+  if (!read_pod(s, tmp.mesh_count)) {
+    s.setstate(std::ios::failbit);
+    return s;
+  }
+  if (!read_pod(s, tmp.index_data_size)) {
+    s.setstate(std::ios::failbit);
+    return s;
+  }
+  if (!read_pod(s, tmp.vertex_data_size)) {
+    s.setstate(std::ios::failbit);
+    return s;
+  }
+  out = tmp;
+  return s;
+}
+
+inline auto
+operator<<(std::ostream& out, const MeshHeader& h) -> std::ostream&
+{
+  write_u32(out, h.magic);
+  write_u32(out, h.mesh_serial_version);
+  write_u32(out, h.mesh_count);
+  write_u32(out, h.index_data_size);
+  write_u32(out, h.vertex_data_size);
+  return out;
+}
+
+template<trivially_serializable T>
+inline auto
+operator<<(std::ostream& out, const std::vector<T>& in) -> std::ostream&
+{
+  const auto n = static_cast<std::uint32_t>(in.size());
+  write_u32(out, n);
+  if (n)
+    write_exact(out, in.data(), static_cast<std::size_t>(n) * sizeof(T));
+  if (!out)
+    out.setstate(std::ios::failbit);
+  return out;
+}
+
+template<trivially_serializable T>
+inline auto
+operator>>(std::istream& in, std::vector<T>& out) -> std::istream&
+{
+  std::uint32_t n{};
+  if (!read_pod(in, n)) {
+    in.setstate(std::ios::failbit);
+    return in;
+  }
+  if (!read_vec(in, out, n)) {
+    in.setstate(std::ios::failbit);
+    return in;
+  }
+  return in;
+}
+
+template<typename T>
+  requires(!trivially_serializable<T> && has_custom_serializer<T>)
+inline auto
+operator<<(std::ostream& out, const std::vector<T>& in) -> std::ostream&
+{
+  const auto n = static_cast<std::uint32_t>(in.size());
+  write_u32(out, n);
+  for (const auto& v : in) {
+    if (!Serializer<T>::serialise(out, v)) {
+      out.setstate(std::ios::failbit);
+      break;
+    }
+  }
+  return out;
+}
+
+template<typename T>
+  requires(!trivially_serializable<T> && has_custom_serializer<T>)
+inline auto
+operator>>(std::istream& in, std::vector<T>& out) -> std::istream&
+{
+  std::uint32_t n{};
+  if (!read_pod(in, n)) {
+    in.setstate(std::ios::failbit);
+    return in;
+  }
+  out.resize(n);
+  for (std::uint32_t i = 0; i < n; ++i) {
+    if (!Serializer<T>::deserialise(in, out[i])) {
+      in.setstate(std::ios::failbit);
+      break;
+    }
+  }
+  return in;
 }
 
 inline auto
@@ -203,14 +272,74 @@ operator<<(std::ostream& out, const VertexInput& in) -> std::ostream&
 }
 
 inline auto
-operator<<(std::ostream& out, const MeshHeader& h) -> std::ostream&
+operator>>(std::istream& in, VertexInput& out_vi) -> std::istream&
 {
-  write_u32(out, h.magic);
-  write_u32(out, h.mesh_serial_version);
-  write_u32(out, h.mesh_count);
-  write_u32(out, h.index_data_size);
-  write_u32(out, h.vertex_data_size);
-  return out;
+  std::uint32_t attr_count{};
+  if (!read_pod(in, attr_count)) {
+    in.setstate(std::ios::failbit);
+    return in;
+  }
+  if (attr_count > VertexInput::vertex_attribute_max_count) {
+    in.setstate(std::ios::failbit);
+    return in;
+  }
+
+  for (std::uint32_t i = 0; i < attr_count; ++i) {
+    VertexInput::VertexAttribute a{};
+    if (!read_pod(in, a.location)) {
+      in.setstate(std::ios::failbit);
+      return in;
+    }
+    if (!read_pod(in, a.binding)) {
+      in.setstate(std::ios::failbit);
+      return in;
+    }
+    std::uint32_t fmt{};
+    if (!read_pod(in, fmt)) {
+      in.setstate(std::ios::failbit);
+      return in;
+    }
+    a.format = static_cast<VertexFormat>(fmt);
+    std::uint32_t off{};
+    if (!read_pod(in, off)) {
+      in.setstate(std::ios::failbit);
+      return in;
+    }
+    a.offset = off;
+    out_vi.attributes[i] = a;
+  }
+
+  std::uint32_t binding_count{};
+  if (!read_pod(in, binding_count)) {
+    in.setstate(std::ios::failbit);
+    return in;
+  }
+  if (binding_count > VertexInput::input_bindings_max_count) {
+    in.setstate(std::ios::failbit);
+    return in;
+  }
+
+  for (std::uint32_t i = 0; i < binding_count; ++i) {
+    VertexInput::VertexInputBinding b{};
+    if (!read_pod(in, b.stride)) {
+      in.setstate(std::ios::failbit);
+      return in;
+    }
+    std::uint8_t rate_u8{};
+    if (!read_exact(in, &rate_u8, sizeof(rate_u8))) {
+      in.setstate(std::ios::failbit);
+      return in;
+    }
+    b.rate = static_cast<VertexInput::VertexInputBinding::Rate>(rate_u8);
+    std::uint8_t pad[3];
+    if (!read_exact(in, pad, sizeof(pad))) {
+      in.setstate(std::ios::failbit);
+      return in;
+    }
+    out_vi.input_bindings[i] = b;
+  }
+
+  return in;
 }
 
 inline auto
@@ -286,46 +415,111 @@ recalculate_bounding_boxes(MeshData& m)
     m.aabbs[mesh_i++] = { vmin, vmax };
   }
 }
+} // namespace
+
+template<>
+struct Serializer<MeshData>
+{
+  static auto serialise(std::ostream& out, const MeshData& mesh) -> bool
+  {
+    out << mesh.streams;
+    out << mesh.meshes;
+    out << mesh.aabbs;
+    out << mesh.vertices;
+    out << mesh.indices;
+    return static_cast<bool>(out);
+  }
+  static auto deserialise(std::istream& in, MeshData& mesh) -> bool
+  {
+    if (!(in >> mesh.streams))
+      return false;
+    if (!(in >> mesh.meshes))
+      return false;
+    if (!(in >> mesh.aabbs))
+      return false;
+    if (!(in >> mesh.vertices))
+      return false;
+    if (!(in >> mesh.indices))
+      return false;
+    return true;
+  }
+};
+
+inline auto
+operator>>(std::istream& in, MeshData& mesh) -> std::istream&
+{
+  if (!Serializer<MeshData>::deserialise(in, mesh))
+    in.setstate(std::ios::failbit);
+  return in;
+}
+
+inline auto
+operator<<(std::ostream& out, const MeshData& mesh) -> std::ostream&
+{
+  if (!Serializer<MeshData>::serialise(out, mesh))
+    out.setstate(std::ios::failbit);
+  return out;
 }
 
 auto
-load_mesh_data(const std::string_view path) -> std::optional<MeshFile>
+save_mesh_file(const std::string_view path, const MeshFile& file) -> void
 {
-  MeshFile file{};
+  std::ofstream stream{ path.data(), std::ios::binary };
+  if (!stream)
+    return;
+  stream << file.header;
+  stream << file.mesh;
+}
 
+auto
+load_mesh_file(const std::string_view path) -> std::optional<MeshFile>
+{
   std::ifstream stream{ path.data(), std::ios::binary };
   if (!stream)
     return std::nullopt;
 
+  MeshFile file{};
   stream >> file.header;
   if (!stream)
     return std::nullopt;
 
-  if (file.header.index_data_size % sizeof(std::uint32_t) != 0)
-    return std::nullopt;
-
-  const auto index_count = static_cast<std::size_t>(
-    file.header.index_data_size / sizeof(std::uint32_t));
-  const auto vertex_bytes =
-    static_cast<std::size_t>(file.header.vertex_data_size);
-
-  if (!read_vec(stream, file.mesh.indices, index_count))
-    return std::nullopt;
-
-  file.mesh.vertices.resize(vertex_bytes);
-  if (vertex_bytes &&
-      !read_exact(stream, file.mesh.vertices.data(), vertex_bytes))
+  stream >> file.mesh;
+  if (!stream)
     return std::nullopt;
 
   return file;
 }
 
-void
+auto
+save_mesh_data(const std::string_view path, const MeshData& mesh) -> bool
+{
+  if (std::filesystem::is_regular_file(path))
+    return false;
+
+  std::ofstream out{ path.data(), std::ios::binary | std::ios::out };
+  if (!out)
+    return false;
+
+  const MeshHeader header{
+    .mesh_count = static_cast<std::uint32_t>(mesh.meshes.size()),
+    .index_data_size =
+      static_cast<std::uint32_t>(std::span{ mesh.indices }.size_bytes()),
+    .vertex_data_size =
+      static_cast<std::uint32_t>(std::span{ mesh.vertices }.size_bytes()),
+  };
+
+  out << header;
+  out << mesh;
+
+  return static_cast<bool>(out);
+}
+
+auto
 process_lods(std::vector<uint32_t>& indices,
              std::vector<uint8_t>& vertices,
              std::size_t vertex_stride,
              std::vector<std::vector<std::uint32_t>>& output_lods,
-             bool should_generate_lods)
+             bool should_generate_lods) -> void
 {
   std::size_t vertex_count_in = vertices.size() / vertex_stride;
   std::size_t target_index_count = indices.size();
@@ -542,7 +736,7 @@ convert_assimp_mesh(const aiMesh* ai_mesh,
 }
 
 auto
-load_mesh_file(const std::string_view path) -> std::optional<MeshData>
+load_mesh_data(const std::string_view path) -> std::optional<MeshData>
 {
   constexpr std::uint32_t flags =
     aiProcess_JoinIdenticalVertices | aiProcess_Triangulate |
@@ -576,33 +770,99 @@ load_mesh_file(const std::string_view path) -> std::optional<MeshData>
 }
 
 auto
-save_mesh_data(const std::string_view path, const MeshData& mesh) -> bool
+RenderMesh::create(IContext& ctx, const std::string_view path)
+  -> std::optional<RenderMesh>
 {
-  if (std::filesystem::is_regular_file(path)) {
-    return false;
+  if (!std::filesystem::is_regular_file(path))
+    return std::nullopt;
+
+  RenderMesh mesh;
+  if (auto maybe_file = load_mesh_file(path); maybe_file) {
+    mesh.file = std::move(maybe_file.value());
+  } else {
+    return std::nullopt;
   }
 
-  std::ofstream out{ path.data(), std::ios::binary | std::ios::out };
-  if (!out) {
-    return false;
+  const auto filename = std::filesystem::path{ path }.filename();
+  mesh.vertex_buffer = VulkanDeviceBuffer::create(
+    ctx,
+    {
+      .data = as_bytes(std::span{ mesh.file.mesh.vertices }),
+      .usage = BufferUsageBits::Vertex,
+      .storage = StorageType::Device,
+      .size = std::span{ mesh.file.mesh.vertices }.size_bytes(),
+      .debug_name = std::format("{}_VB", filename.string()),
+    });
+
+  mesh.index_buffer = VulkanDeviceBuffer::create(
+    ctx,
+    {
+      .data = as_bytes(std::span{ mesh.file.mesh.indices }),
+      .usage = BufferUsageBits::Index,
+      .storage = StorageType::Device,
+      .size = std::span{ mesh.file.mesh.indices }.size_bytes(),
+      .debug_name = std::format("{}_IB", filename.string()),
+    });
+
+  std::vector<std::uint8_t> draw_commands;
+  const auto& command_count = mesh.file.header.mesh_count;
+  draw_commands.resize(sizeof(VkDrawIndexedIndirectCommand) * command_count +
+                       sizeof(std::uint32_t));
+  std::memcpy(draw_commands.data(), &command_count, sizeof(command_count));
+  VkDrawIndexedIndirectCommand* cmd =
+    std::launder(reinterpret_cast<VkDrawIndexedIndirectCommand*>(
+      draw_commands.data() + sizeof(std::uint32_t)));
+  for (std::uint32_t i = 0; i < command_count; i++) {
+    *cmd++ = VkDrawIndexedIndirectCommand{
+      .indexCount = mesh.file.mesh.meshes[i].get_lod_index_count(0),
+      .instanceCount = 1,
+      .firstIndex = mesh.file.mesh.meshes[i].index_offset,
+      .vertexOffset =
+        static_cast<std::int32_t>(mesh.file.mesh.meshes[i].vertex_offset),
+      .firstInstance = 0,
+    };
   }
 
-  const MeshHeader header{
-    .mesh_count = static_cast<std::uint32_t>(mesh.meshes.size()),
-    .index_data_size =
-      static_cast<std::uint32_t>(std::span{ mesh.indices }.size_bytes()),
-    .vertex_data_size =
-      static_cast<std::uint32_t>(std::span{ mesh.meshes }.size_bytes()),
+  mesh.indirect_buffer = VulkanDeviceBuffer::create(
+    ctx,
+    {
+      .data = as_bytes(std::span{ draw_commands }),
+      .usage = BufferUsageBits::Indirect,
+      .storage = StorageType::Device,
+      .size = std::span{ draw_commands }.size_bytes(),
+      .debug_name = std::format("{}_IndirectBuffer", filename.string()),
+    });
+
+  const auto transforms =
+    generate_n(1, [](const auto&) { return glm::identity<glm::mat4>(); });
+  mesh.transform_buffer = VulkanDeviceBuffer::create(
+    ctx,
+    {
+      .data = as_bytes(std::span{ draw_commands }),
+      .usage = BufferUsageBits::Storage,
+      .storage = StorageType::Device,
+      .size = std::span{ draw_commands }.size_bytes(),
+      .debug_name = std::format("{}_TransformBuffer", filename.string()),
+    });
+
+  struct SomeMaterial
+  {
+    std::uint32_t texture;
   };
+  const auto materials =
+    generate_n(mesh.file.mesh.meshes.size(),
+               [](const auto) -> SomeMaterial { return { 0 }; });
+  mesh.material_buffer = VulkanDeviceBuffer::create(
+    ctx,
+    {
+      .data = as_bytes(std::span{ materials }),
+      .usage = BufferUsageBits::Storage,
+      .storage = StorageType::Device,
+      .size = std::span{ materials }.size_bytes(),
+      .debug_name = std::format("{}_MaterialBuffer", filename.string()),
+    });
 
-  out << header;
-  out << mesh.streams;
-  out << mesh.meshes;
-  out << mesh.aabbs;
-  out << mesh.vertices;
-  out << mesh.indices;
-
-  return true;
+  return mesh;
 }
 
 }

@@ -1,7 +1,6 @@
 file(GLOB_RECURSE sv_sources CONFIGURE_DEPENDS "sv/src/*.cpp" "sv/include/*.hpp")
 
 add_library(sv STATIC ${sv_sources})
-set_target_properties(sv PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(sv PUBLIC cxx_std_23)
 target_include_directories(sv
   PUBLIC
