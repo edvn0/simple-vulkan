@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "sv/common.hpp"
+#include "sv/material_definition.hpp"
 #include "sv/object_handle.hpp"
 #include "sv/strong.hpp"
 
@@ -17,9 +18,6 @@ constexpr auto calculate_lods{ true };
 constexpr auto max_lods{ 8ULL };
 constexpr auto magic_header{ 0xFAB2C1U };
 constexpr auto serial_version{ 0x1001 };
-
-struct Material
-{};
 
 struct MeshHeader
 {
@@ -55,8 +53,9 @@ struct MeshData
 
   std::vector<Mesh> meshes{};
   std::vector<BoundingBox> aabbs{};
-  std::vector<Material> materials;
-  std::vector<std::string> texture_files{};
+  std::vector<Material> materials{};
+  std::vector<std::string> texture_files{}; // This is just wrong, I need a
+                                            // vector of ktx textures somehow
 };
 
 struct MeshFile
@@ -94,6 +93,10 @@ public:
   auto get_index_buffer() const -> const auto& { return index_buffer; }
 };
 
+auto
+load_mesh_data_materials(const std::string_view, MeshData&);
+auto
+save_mesh_data_materials(const std::string_view, const MeshData&) -> void;
 auto
 load_mesh_file(const std::string_view) -> std::optional<MeshFile>;
 auto
