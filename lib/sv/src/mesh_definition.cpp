@@ -10,12 +10,17 @@
 #include <assimp/scene.h>
 #include <meshoptimizer.h>
 
+#include <execution>
 #include <filesystem>
 #include <glm/gtc/packing.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
+#include <ktx.h>
 #include <ranges>
 #include <type_traits>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
 
 namespace sv {
 
@@ -70,6 +75,63 @@ struct Serializer<T>
   static auto deserialise(std::istream& in, T& val) -> bool
   {
     EXPECT_READ_OFFSET(in, &val, 0, sizeof(T));
+    return true;
+  }
+};
+
+template<>
+struct Serializer<Material>
+{
+  static auto serialise(std::ostream& out, const Material& m) -> bool
+  {
+    EXPECT_WRITE(out, glm::value_ptr(m.emissive_factor), sizeof(glm::vec4));
+    EXPECT_WRITE(out, &m.emissive_texture, sizeof(std::int32_t));
+    EXPECT_WRITE(out, &m.base_colour_texture, sizeof(std::int32_t));
+    EXPECT_WRITE(out, &m.normal_texture, sizeof(std::int32_t));
+    EXPECT_WRITE(out, &m.metallic_texture, sizeof(std::int32_t));
+    EXPECT_WRITE(out, &m.roughness_texture, sizeof(std::int32_t));
+    EXPECT_WRITE(out, &m.opacity_texture, sizeof(std::int32_t));
+    return true;
+  }
+  static auto deserialise(std::istream& in, Material& m) -> bool
+  {
+    EXPECT_READ(in, glm::value_ptr(m.emissive_factor), sizeof(glm::vec4));
+    EXPECT_READ(in, &m.emissive_texture, sizeof(std::int32_t));
+    EXPECT_READ(in, &m.base_colour_texture, sizeof(std::int32_t));
+    EXPECT_READ(in, &m.normal_texture, sizeof(std::int32_t));
+    EXPECT_READ(in, &m.metallic_texture, sizeof(std::int32_t));
+    EXPECT_READ(in, &m.roughness_texture, sizeof(std::int32_t));
+    EXPECT_READ(in, &m.opacity_texture, sizeof(std::int32_t));
+    return true;
+  }
+};
+
+template<>
+struct Serializer<CompressedTexture>
+{
+  static auto serialise(std::ostream& out, const CompressedTexture& t) -> bool
+  {
+    EXPECT_WRITE(out, &t.width, sizeof(std::uint32_t));
+    EXPECT_WRITE(out, &t.height, sizeof(std::uint32_t));
+    EXPECT_WRITE(out, &t.mip_levels, sizeof(std::uint32_t));
+    EXPECT_WRITE(out, &t.format, sizeof(std::uint32_t));
+    const auto sz = static_cast<std::uint32_t>(t.bytes.size());
+    EXPECT_WRITE(out, &sz, sizeof(std::uint32_t));
+    if (sz)
+      EXPECT_WRITE(out, t.bytes.data(), sz);
+    return true;
+  }
+  static auto deserialise(std::istream& in, CompressedTexture& t) -> bool
+  {
+    EXPECT_READ(in, &t.width, sizeof(std::uint32_t));
+    EXPECT_READ(in, &t.height, sizeof(std::uint32_t));
+    EXPECT_READ(in, &t.mip_levels, sizeof(std::uint32_t));
+    EXPECT_READ(in, &t.format, sizeof(std::uint32_t));
+    std::uint32_t sz{};
+    EXPECT_READ(in, &sz, sizeof(std::uint32_t));
+    t.bytes.resize(sz);
+    if (sz)
+      EXPECT_READ(in, t.bytes.data(), sz);
     return true;
   }
 };
@@ -137,15 +199,11 @@ write_u8(std::ostream& s, std::uint8_t v) -> std::ostream&
   return write_exact(s, &v, sizeof(v));
 }
 
-inline auto
+auto
 operator>>(std::istream& s, MeshHeader& out) -> std::istream&
 {
   MeshHeader tmp{};
-  if (!read_pod(s, tmp.magic)) {
-    s.setstate(std::ios::failbit);
-    return s;
-  }
-  if (tmp.magic != magic_header) {
+  if (!read_pod(s, tmp.magic) || tmp.magic != magic_header) {
     s.setstate(std::ios::failbit);
     return s;
   }
@@ -165,6 +223,26 @@ operator>>(std::istream& s, MeshHeader& out) -> std::istream&
     s.setstate(std::ios::failbit);
     return s;
   }
+
+  if (tmp.mesh_serial_version >= 0x1002) {
+    if (!read_pod(s, tmp.material_count)) {
+      s.setstate(std::ios::failbit);
+      return s;
+    }
+    if (!read_pod(s, tmp.texture_count)) {
+      s.setstate(std::ios::failbit);
+      return s;
+    }
+    if (!read_pod(s, tmp.texture_data_size)) {
+      s.setstate(std::ios::failbit);
+      return s;
+    }
+  } else {
+    tmp.material_count = 0;
+    tmp.texture_count = 0;
+    tmp.texture_data_size = 0;
+  }
+
   out = tmp;
   return s;
 }
@@ -177,6 +255,9 @@ operator<<(std::ostream& out, const MeshHeader& h) -> std::ostream&
   write_u32(out, h.mesh_count);
   write_u32(out, h.index_data_size);
   write_u32(out, h.vertex_data_size);
+  write_u32(out, h.material_count);
+  write_u32(out, h.texture_count);
+  write_u32(out, h.texture_data_size);
   return out;
 }
 
@@ -427,6 +508,8 @@ struct Serializer<MeshData>
     out << mesh.aabbs;
     out << mesh.vertices;
     out << mesh.indices;
+    out << mesh.materials;           // new
+    out << mesh.compressed_textures; // new
     return static_cast<bool>(out);
   }
   static auto deserialise(std::istream& in, MeshData& mesh) -> bool
@@ -441,6 +524,28 @@ struct Serializer<MeshData>
       return false;
     if (!(in >> mesh.indices))
       return false;
+    {
+      auto pos = in.tellg();
+      std::vector<Material> mats;
+      if (in >> mats)
+        mesh.materials = std::move(mats);
+      else {
+        in.clear();
+        in.seekg(pos);
+        mesh.materials.clear();
+      }
+    }
+    {
+      auto pos = in.tellg();
+      std::vector<CompressedTexture> tex;
+      if (in >> tex)
+        mesh.compressed_textures = std::move(tex);
+      else {
+        in.clear();
+        in.seekg(pos);
+        mesh.compressed_textures.clear();
+      }
+    }
     return true;
   }
 };
@@ -500,17 +605,24 @@ save_mesh_data(const std::string_view path, const MeshData& mesh) -> bool
   if (!out)
     return false;
 
+  std::uint32_t tex_bytes = 0;
+  for (const auto& t : mesh.compressed_textures)
+    tex_bytes += static_cast<std::uint32_t>(t.bytes.size());
+
   const MeshHeader header{
     .mesh_count = static_cast<std::uint32_t>(mesh.meshes.size()),
     .index_data_size =
       static_cast<std::uint32_t>(std::span{ mesh.indices }.size_bytes()),
     .vertex_data_size =
       static_cast<std::uint32_t>(std::span{ mesh.vertices }.size_bytes()),
+    .material_count = static_cast<std::uint32_t>(mesh.materials.size()),
+    .texture_count =
+      static_cast<std::uint32_t>(mesh.compressed_textures.size()),
+    .texture_data_size = tex_bytes,
   };
 
   out << header;
   out << mesh;
-
   return static_cast<bool>(out);
 }
 
@@ -536,28 +648,30 @@ process_lods(std::vector<uint32_t>& indices,
 
     bool sloppy = false;
 
-    size_t num_opt_simplify = meshopt_simplify(indices.data(),
-                                               indices.data(),
-                                               (uint32_t)indices.size(),
-                                               (const float*)vertices.data(),
-                                               vertex_count_in,
-                                               vertex_stride,
-                                               target_index_count,
-                                               0.02f,
-                                               0,
-                                               nullptr);
+    size_t num_opt_simplify =
+      meshopt_simplify(indices.data(),
+                       indices.data(),
+                       (uint32_t)indices.size(),
+                       reinterpret_cast<const float*>(vertices.data()),
+                       vertex_count_in,
+                       vertex_stride,
+                       target_index_count,
+                       0.02f,
+                       0,
+                       nullptr);
 
     if (static_cast<size_t>(num_opt_simplify * 1.1f) > indices.size()) {
       if (LOD > 1) {
-        num_opt_simplify = meshopt_simplifySloppy(indices.data(),
-                                                  indices.data(),
-                                                  indices.size(),
-                                                  (const float*)vertices.data(),
-                                                  vertex_count_in,
-                                                  vertex_stride,
-                                                  target_index_count,
-                                                  0.02f,
-                                                  nullptr);
+        num_opt_simplify = meshopt_simplifySloppy(
+          indices.data(),
+          indices.data(),
+          indices.size(),
+          reinterpret_cast<const float*>(vertices.data()),
+          vertex_count_in,
+          vertex_stride,
+          target_index_count,
+          0.02f,
+          nullptr);
         sloppy = true;
         if (num_opt_simplify == indices.size())
           break;
@@ -581,8 +695,7 @@ convert_assimp_mesh(const aiMesh* ai_mesh,
                     IndexOffset& i) -> Mesh
 {
   const auto count = ai_mesh->mNumVertices;
-  auto empty_data = std::vector<aiVector3D>{};
-  empty_data.resize(count);
+  auto empty_data = std::vector<aiVector3D>{ count };
 
   const auto positions = std::span{ ai_mesh->mVertices, count };
   const auto normals = ai_mesh->HasNormals()
@@ -654,13 +767,13 @@ convert_assimp_mesh(const aiMesh* ai_mesh,
       source_indices.push_back(ai_mesh->mFaces[face_index].mIndices[j]);
   }
 
-  const uint32_t vertex_stride = data.streams.compute_vertex_size();
+  const std::uint32_t vertex_stride = data.streams.compute_vertex_size();
 
   {
-    const uint32_t vertex_count_prior =
+    const std::uint32_t vertex_count_prior =
       static_cast<std::uint32_t>(vertices.size()) / vertex_stride;
-    std::vector<uint32_t> remap(vertex_count_prior);
-    const size_t vertexCountOut =
+    std::vector<std::uint32_t> remap(vertex_count_prior);
+    const std::size_t vertex_count_out =
       meshopt_generateVertexRemap(remap.data(),
                                   source_indices.data(),
                                   source_indices.size(),
@@ -668,8 +781,9 @@ convert_assimp_mesh(const aiMesh* ai_mesh,
                                   vertex_count_prior,
                                   vertex_stride);
 
-    std::vector<uint32_t> remapped_indices(source_indices.size());
-    std::vector<uint8_t> remapped_vertices(vertexCountOut * vertex_stride);
+    std::vector<std::uint32_t> remapped_indices(source_indices.size());
+    std::vector<std::uint8_t> remapped_vertices(vertex_count_out *
+                                                vertex_stride);
 
     meshopt_remapIndexBuffer(remapped_indices.data(),
                              source_indices.data(),
@@ -684,29 +798,30 @@ convert_assimp_mesh(const aiMesh* ai_mesh,
     meshopt_optimizeVertexCache(remapped_indices.data(),
                                 remapped_indices.data(),
                                 source_indices.size(),
-                                vertexCountOut);
-    meshopt_optimizeOverdraw(remapped_indices.data(),
-                             remapped_indices.data(),
-                             source_indices.size(),
-                             (const float*)remapped_vertices.data(),
-                             vertexCountOut,
-                             vertex_stride,
-                             1.05f);
+                                vertex_count_out);
+    meshopt_optimizeOverdraw(
+      remapped_indices.data(),
+      remapped_indices.data(),
+      source_indices.size(),
+      reinterpret_cast<const float*>(remapped_vertices.data()),
+      vertex_count_out,
+      vertex_stride,
+      1.05f);
     meshopt_optimizeVertexFetch(remapped_vertices.data(),
                                 remapped_indices.data(),
                                 source_indices.size(),
                                 remapped_vertices.data(),
-                                vertexCountOut,
+                                vertex_count_out,
                                 vertex_stride);
 
     source_indices = remapped_indices;
     vertices = remapped_vertices;
   }
 
-  const uint32_t numVertices =
-    static_cast<uint32_t>(vertices.size() / vertex_stride);
+  const std::uint32_t numVertices =
+    static_cast<std::uint32_t>(vertices.size() / vertex_stride);
 
-  std::vector<std::vector<uint32_t>> out_lods;
+  std::vector<std::vector<std::uint32_t>> out_lods;
   process_lods(
     source_indices, vertices, vertex_stride, out_lods, calculate_lods);
 
@@ -717,22 +832,284 @@ convert_assimp_mesh(const aiMesh* ai_mesh,
   };
 
   std::uint32_t numIndices = 0;
-  for (size_t l = 0; l < out_lods.size(); l++) {
+  for (std::size_t l = 0; l < out_lods.size(); l++) {
     merge_vectors(data.indices, out_lods[l]);
     result.lod_offset[l] = numIndices;
-    numIndices += (uint32_t)out_lods[l].size();
+    numIndices += static_cast<std::uint32_t>(out_lods[l].size());
   }
 
   merge_vectors(data.vertices, vertices);
 
   result.lod_offset[out_lods.size()] = numIndices;
-  result.lod_count = (uint32_t)out_lods.size();
+  result.lod_count = static_cast<std::uint32_t>(out_lods.size());
   result.material_index = ai_mesh->mMaterialIndex;
 
   i += IndexOffset{ numIndices };
   v += VertexOffset{ numVertices };
 
   return result;
+}
+
+using KeyToIndexMap = std::unordered_map<std::string, std::int32_t>;
+
+static auto
+key_from_ai_string(const aiString& s) -> std::string
+{
+  return std::string{ s.C_Str() };
+}
+
+static auto
+get_mat_tex(const aiMaterial* mat, const aiTextureType type, aiString& out)
+  -> bool
+{
+  aiTextureMapping m{};
+  std::uint32_t uv{};
+  float blend{};
+  aiTextureOp op{};
+  std::array<aiTextureMapMode, 2> modes{ aiTextureMapMode_Wrap,
+                                         aiTextureMapMode_Wrap };
+  return mat->GetTexture(type, 0, &out, &m, &uv, &blend, &op, modes.data()) ==
+         aiReturn_SUCCESS;
+}
+
+static auto
+convert_assimp_material_embedded_refs(
+  const aiMaterial* mat,
+  std::size_t material_idx,
+  std::vector<PendingTextureReference>& refs) -> Material
+{
+  Material out{};
+  out.emissive_texture = -1;
+  out.base_colour_texture = -1;
+  out.normal_texture = -1;
+  out.metallic_texture = -1;
+  out.roughness_texture = -1;
+  out.opacity_texture = -1;
+
+  aiColor4D c{};
+  if (aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &c) == AI_SUCCESS) {
+    out.emissive_factor = { c.r, c.g, c.b, std::min(c.a, 1.0f) };
+  }
+
+  aiString p{};
+  if (get_mat_tex(mat, aiTextureType_EMISSIVE, p) && p.C_Str()[0] == '*')
+    refs.emplace_back(
+      material_idx, MaterialSlot::emissive, key_from_ai_string(p));
+  if (get_mat_tex(mat, aiTextureType_DIFFUSE, p) && p.C_Str()[0] == '*')
+    refs.emplace_back(
+      material_idx, MaterialSlot::base_color, key_from_ai_string(p));
+  if (get_mat_tex(mat, aiTextureType_NORMALS, p) && p.C_Str()[0] == '*')
+    refs.emplace_back(
+      material_idx, MaterialSlot::normal, key_from_ai_string(p));
+  if (get_mat_tex(mat, aiTextureType_METALNESS, p) && p.C_Str()[0] == '*')
+    refs.emplace_back(
+      material_idx, MaterialSlot::metallic, key_from_ai_string(p));
+  if (get_mat_tex(mat, aiTextureType_DIFFUSE_ROUGHNESS, p) &&
+      p.C_Str()[0] == '*')
+    refs.emplace_back(
+      material_idx, MaterialSlot::roughness, key_from_ai_string(p));
+  if (get_mat_tex(mat, aiTextureType_OPACITY, p) && p.C_Str()[0] == '*')
+    refs.emplace_back(
+      material_idx, MaterialSlot::opacity, key_from_ai_string(p));
+
+  return out;
+}
+
+struct RGBAImage
+{
+  std::vector<std::byte> pixels;
+  std::uint32_t width{};
+  std::uint32_t height{};
+};
+
+static auto
+decode_embedded_rgba8(const aiTexture* tex) -> RGBAImage
+{
+  if (!tex)
+    throw std::runtime_error("null aiTexture");
+
+  RGBAImage out{};
+  if (tex->mHeight == 0) {
+    // Compressed blob (JPEG, PNG, etc.)
+    const auto* data = reinterpret_cast<const stbi_uc*>(tex->pcData);
+    const auto size = static_cast<int>(tex->mWidth);
+    int w{}, h{}, n{};
+    stbi_uc* decoded = stbi_load_from_memory(data, size, &w, &h, &n, 4);
+    if (!decoded)
+      throw std::runtime_error("stbi_load_from_memory failed");
+
+    out.width = static_cast<std::uint32_t>(w);
+    out.height = static_cast<std::uint32_t>(h);
+    out.pixels.resize(static_cast<std::size_t>(w) * h * 4);
+    std::memcpy(out.pixels.data(), decoded, out.pixels.size());
+    stbi_image_free(decoded);
+    return out;
+  }
+
+  out.width = tex->mWidth;
+  out.height = tex->mHeight;
+  out.pixels.resize(static_cast<std::size_t>(out.width) * out.height * 4);
+
+  const auto* src = reinterpret_cast<const std::uint8_t*>(tex->pcData);
+  auto* dst = reinterpret_cast<std::uint8_t*>(out.pixels.data());
+
+  for (std::size_t i = 0; i < out.width * out.height; ++i) {
+    dst[i * 4 + 0] = src[i * 4 + 0]; // R
+    dst[i * 4 + 1] = src[i * 4 + 1]; // G
+    dst[i * 4 + 2] = src[i * 4 + 2]; // B
+    dst[i * 4 + 3] = src[i * 4 + 3]; // A
+  }
+  return out;
+}
+
+auto
+compress_embedded_to_ktx(const aiTexture* tex) -> CompressedTexture
+{
+  auto img = decode_embedded_rgba8(tex); // RGBA8 pixels
+
+  ktxTextureCreateInfo ci{};
+  ci.vkFormat = VK_FORMAT_R8G8B8A8_UNORM;
+  ci.baseWidth = img.width;
+  ci.baseHeight = img.height;
+  ci.baseDepth = 1;
+  ci.numDimensions = 2;
+  ci.numLevels = 1;
+  ci.numLayers = 1;
+  ci.numFaces = 1;
+  ci.isArray = KTX_FALSE;
+
+  ktxTexture2* ktx{};
+  if (const auto r =
+        ktxTexture2_Create(&ci, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &ktx);
+      r != KTX_SUCCESS)
+    throw std::runtime_error("ktxTexture2_Create failed");
+
+  // Upload level 0
+  if (const auto r = ktxTexture_SetImageFromMemory(
+        ktxTexture(ktx),
+        0,
+        0,
+        0,
+        reinterpret_cast<const ktx_uint8_t*>(img.pixels.data()),
+        img.pixels.size());
+      r != KTX_SUCCESS) {
+    const auto failure_reason = ktxErrorString(r);
+    std::cerr << "SetImage failed: " << failure_reason << std::endl;
+    ktxTexture_Destroy(ktxTexture(ktx));
+    throw std::runtime_error("SetImage failed");
+  }
+
+  // Compress to BasisU (UASTC recommended for BC7)
+  ktxBasisParams params{};
+  if (const auto r = ktxTexture2_CompressBasis(ktx, 30); r != KTX_SUCCESS) {
+
+    const auto failure_reason = ktxErrorString(r);
+    std::cerr << "SetImage failed: " << failure_reason << std::endl;
+    ktxTexture_Destroy(ktxTexture(ktx));
+    throw std::runtime_error("CompressBasis failed");
+  }
+
+  // Transcode to BC7
+  if (const auto r = ktxTexture2_TranscodeBasis(ktx, KTX_TTF_BC7_RGBA, 0);
+      r != KTX_SUCCESS) {
+
+    const auto failure_reason = ktxErrorString(r);
+    std::cerr << "SetImage failed: " << failure_reason << std::endl;
+    ktxTexture_Destroy(ktxTexture(ktx));
+    throw std::runtime_error("TranscodeBasis failed");
+  }
+
+  // Serialize
+  ktx_uint8_t* out_data{};
+  ktx_size_t out_size{};
+  if (const auto r =
+        ktxTexture_WriteToMemory(ktxTexture(ktx), &out_data, &out_size);
+      r != KTX_SUCCESS) {
+
+    const auto failure_reason = ktxErrorString(r);
+    std::cerr << "SetImage failed: " << failure_reason << std::endl;
+    ktxTexture_Destroy(ktxTexture(ktx));
+    throw std::runtime_error("WriteToMemory failed");
+  }
+
+  CompressedTexture out{};
+  out.bytes.resize(out_size);
+  std::memcpy(out.bytes.data(), out_data, out_size);
+  out.width = img.width;
+  out.height = img.height;
+  out.mip_levels = ktx->numLevels;
+  out.format = VK_FORMAT_BC7_UNORM_BLOCK; // matches KTX_TTF_BC7_RGBA
+
+  ktxTexture_Destroy(ktxTexture(ktx));
+  std::free(out_data);
+  return out;
+}
+
+static auto
+build_compressed_cache_parallel(const aiScene* scene,
+                                std::span<const std::string> keys,
+                                std::vector<CompressedTexture>& out_cache,
+                                KeyToIndexMap& out_index) -> void
+{
+  std::vector<std::string> uniq(keys.begin(), keys.end());
+  std::sort(uniq.begin(), uniq.end());
+  uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
+
+  std::vector<CompressedTexture> tmp(uniq.size());
+
+  std::for_each(
+    std::execution::par, uniq.begin(), uniq.end(), [&](const std::string& k) {
+      const aiTexture* t = scene->GetEmbeddedTexture(k.c_str());
+      if (!t)
+        return;
+      auto c = compress_embedded_to_ktx(t);
+      auto i = static_cast<std::size_t>(&k - uniq.data());
+      tmp[i] = std::move(c);
+    });
+
+  out_cache.reserve(out_cache.size() + tmp.size());
+  for (std::size_t i = 0; i < uniq.size(); ++i) {
+    out_index.emplace(uniq[i], static_cast<std::int32_t>(out_cache.size()));
+    out_cache.emplace_back(std::move(tmp[i]));
+  }
+}
+
+auto
+set_slot(Material& m, MaterialSlot s, std::int32_t v) -> void
+{
+  switch (s) {
+    case MaterialSlot::emissive:
+      m.emissive_texture = v;
+      break;
+    case MaterialSlot::base_color:
+      m.base_colour_texture = v;
+      break;
+    case MaterialSlot::normal:
+      m.normal_texture = v;
+      break;
+    case MaterialSlot::metallic:
+      m.metallic_texture = v;
+      break;
+    case MaterialSlot::roughness:
+      m.roughness_texture = v;
+      break;
+    case MaterialSlot::opacity:
+      m.opacity_texture = v;
+      break;
+  }
+}
+
+auto
+patch_materials(std::vector<Material>& materials,
+                const std::vector<PendingTextureReference>& refs,
+                const KeyToIndexMap& key_to_index) -> void
+{
+  for (const auto& r : refs) {
+    auto it = key_to_index.find(r.key);
+    set_slot(materials[r.material_idx],
+             r.slot,
+             it == key_to_index.end() ? -1 : it->second);
+  }
 }
 
 auto
@@ -766,6 +1143,30 @@ load_mesh_data(const std::string_view path) -> std::optional<MeshData>
       scene->mMeshes[i], output, vertex_offset, index_offset));
     recalculate_bounding_boxes(output);
   }
+
+  std::vector<Material> materials;
+  materials.reserve(scene->mNumMaterials);
+
+  std::vector<PendingTextureReference> refs;
+
+  for (std::size_t i = 0; i < scene->mNumMaterials; ++i)
+    materials.push_back(
+      convert_assimp_material_embedded_refs(scene->mMaterials[i], i, refs));
+
+  std::vector<std::string> keys;
+  keys.reserve(refs.size());
+  for (auto& r : refs)
+    keys.push_back(r.key);
+
+  std::vector<CompressedTexture> texture_cache;
+  KeyToIndexMap key_to_index;
+
+  build_compressed_cache_parallel(scene, keys, texture_cache, key_to_index);
+  patch_materials(materials, refs, key_to_index);
+
+  output.materials = std::move(materials);
+  output.compressed_textures = std::move(texture_cache);
+
   return output;
 }
 
@@ -783,7 +1184,7 @@ RenderMesh::create(IContext& ctx, const std::string_view path)
     return std::nullopt;
   }
 
-  const auto filename = std::filesystem::path{ path }.filename();
+  const auto filename = std::filesystem::path{ path }.filename().string();
   mesh.vertex_buffer = VulkanDeviceBuffer::create(
     ctx,
     {
@@ -791,7 +1192,7 @@ RenderMesh::create(IContext& ctx, const std::string_view path)
       .usage = BufferUsageBits::Vertex,
       .storage = StorageType::Device,
       .size = std::span{ mesh.file.mesh.vertices }.size_bytes(),
-      .debug_name = std::format("{}_VB", filename.string()),
+      .debug_name = std::format("{}_VB", filename),
     });
 
   mesh.index_buffer = VulkanDeviceBuffer::create(
@@ -801,7 +1202,7 @@ RenderMesh::create(IContext& ctx, const std::string_view path)
       .usage = BufferUsageBits::Index,
       .storage = StorageType::Device,
       .size = std::span{ mesh.file.mesh.indices }.size_bytes(),
-      .debug_name = std::format("{}_IB", filename.string()),
+      .debug_name = std::format("{}_IB", filename),
     });
 
   std::vector<std::uint8_t> draw_commands;
@@ -830,7 +1231,7 @@ RenderMesh::create(IContext& ctx, const std::string_view path)
       .usage = BufferUsageBits::Indirect,
       .storage = StorageType::Device,
       .size = std::span{ draw_commands }.size_bytes(),
-      .debug_name = std::format("{}_IndirectBuffer", filename.string()),
+      .debug_name = std::format("{}_IndirectBuffer", filename),
     });
 
   const auto transforms =
@@ -842,7 +1243,7 @@ RenderMesh::create(IContext& ctx, const std::string_view path)
       .usage = BufferUsageBits::Storage,
       .storage = StorageType::Device,
       .size = std::span{ draw_commands }.size_bytes(),
-      .debug_name = std::format("{}_TransformBuffer", filename.string()),
+      .debug_name = std::format("{}_TransformBuffer", filename),
     });
 
   struct SomeMaterial
@@ -859,7 +1260,7 @@ RenderMesh::create(IContext& ctx, const std::string_view path)
       .usage = BufferUsageBits::Storage,
       .storage = StorageType::Device,
       .size = std::span{ materials }.size_bytes(),
-      .debug_name = std::format("{}_MaterialBuffer", filename.string()),
+      .debug_name = std::format("{}_MaterialBuffer", filename),
     });
 
   return mesh;

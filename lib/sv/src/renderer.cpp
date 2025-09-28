@@ -169,10 +169,12 @@ Renderer::Renderer(IContext& ctx,
     });
 
   auto&& [w, h] = extent;
-  resize(w, h);
+  Renderer::resize(w, h);
 
   imgui = std::make_unique<ImGuiRenderer>(*context, "fonts/Roboto-Regular.ttf");
-  cube = *RenderMesh::create(*context, "meshes/cube.cache.obj");
+  auto m = load_mesh_data("meshes/Avocado.glb");
+  save_mesh_data("meshes/Avocado.cache.glb", *m);
+  cube = *RenderMesh::create(*context, "meshes/Avocado.cache.glb");
 }
 
 Renderer::~Renderer() = default;

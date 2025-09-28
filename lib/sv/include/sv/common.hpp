@@ -433,7 +433,7 @@ struct VertexInput final
     std::uint32_t offset = 0;
     std::uint32_t location = 0;
     for (const auto format : formats) {
-      vi.attributes[location] = VertexAttribute{
+      vi.attributes.at(location) = VertexAttribute{
         .location = location,
         .binding = 0,
         .format = format,
@@ -442,10 +442,10 @@ struct VertexInput final
       offset += vi.get_vertex_format_size<std::uint32_t>(format);
       location++;
     }
-    vi.input_bindings[0] = VertexInputBinding{ .stride = offset };
+    vi.input_bindings.at(0) = VertexInputBinding{ .stride = offset };
 
     for (const auto format : instance_formats) {
-      vi.attributes[location] = VertexAttribute{
+      vi.attributes.at(location) = VertexAttribute{
         .location = location,
         .binding = 1,
         .format = format,

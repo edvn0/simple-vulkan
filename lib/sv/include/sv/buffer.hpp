@@ -29,7 +29,7 @@ struct BufferDescription
   StorageType storage{ StorageType::HostVisible };
   std::size_t size{ 0 }; // Will be aligned according to min alignment of the
   // <uniform/storage/etc> arrays of the physical device.
-  std::string_view debug_name;
+  std::string debug_name;
 };
 
 struct VulkanDeviceBuffer

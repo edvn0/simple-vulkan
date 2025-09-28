@@ -7,6 +7,7 @@ target_include_directories(sv
     ${CMAKE_CURRENT_SOURCE_DIR}/sv/include
   PRIVATE
     ${vulkan_headers_SOURCE_DIR}/include
+    ${stb_SOURCE_DIR}
 )
 target_precompile_headers(sv PUBLIC sv/include/sv/svpch.hpp)
 
@@ -35,6 +36,7 @@ target_link_libraries(sv
     tinyobjloader_double
     assimp::assimp
     meshoptimizer
+    ktx
 )
 
 function(enable_sane_warnings target)

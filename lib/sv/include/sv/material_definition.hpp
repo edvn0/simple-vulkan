@@ -13,7 +13,7 @@ enum class MaterialFlagBits : std::uint32_t
   ReceiveShadow = bit(1),
   Transparent = bit(2),
 };
-MAKE_BIT_FIELD(MaterialFlagBits)
+BIT_FIELD(MaterialFlagBits)
 
 struct Material
 {
@@ -28,6 +28,8 @@ struct Material
   std::int32_t emissive_texture{ -1 };
   std::int32_t normal_texture{ -1 };
   std::int32_t opacity_texture{ -1 };
+  std::int32_t metallic_texture{ -1 };
+  std::int32_t roughness_texture{ -1 };
 
   MaterialFlagBits material_flags{
     MaterialFlagBits::CastsShadow | MaterialFlagBits::ReceiveShadow,

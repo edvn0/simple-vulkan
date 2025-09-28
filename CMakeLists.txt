@@ -1,6 +1,6 @@
 ﻿cmake_minimum_required(VERSION 3.31)
 
-project(simple-vulkan LANGUAGES CXX)
+project(simple-vulkan LANGUAGES CXX C)
 
 include(CTest)
 include(CheckCXXSourceCompiles)
@@ -166,6 +166,17 @@ FetchContent_Declare(meshoptimizer
 )
 FetchContent_MakeAvailable(meshoptimizer)
 
+FetchContent_Declare(ktx GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git GIT_TAG v4.4.0 GIT_SHALLOW TRUE)
+set(BASISU_SUPPORT_OPENCL ON CACHE BOOL "" FORCE)
+set(KTX_FEATURE_LOADTEST_APPS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_DOC OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_TESTS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_GL_UPLOAD OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_TOOLS_CTS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(ktx)
+
+FetchContent_Declare(stb GIT_REPOSITORY https://github.com/nothings/stb.git GIT_TAG master GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(stb)
 
 add_subdirectory(lib)
 

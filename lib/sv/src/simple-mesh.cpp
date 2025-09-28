@@ -47,7 +47,7 @@ make_buffers(IContext& ctx,
                                  .usage = BufferUsageBits::Vertex,
                                  .storage = StorageType::Device,
                                  .size = vertices.size() * sizeof(VertexPNV2),
-                                 .debug_name = name });
+                                 .debug_name = std::format("{}", name), });
 
   auto ib =
     VulkanDeviceBuffer::create(ctx,
@@ -55,7 +55,7 @@ make_buffers(IContext& ctx,
                                  .usage = BufferUsageBits::Index,
                                  .storage = StorageType::Device,
                                  .size = indices.size() * sizeof(std::uint32_t),
-                                 .debug_name = name });
+                                 .debug_name = std::format("{}", name), });
 
   return { std::move(vb), std::move(ib) };
 }
